@@ -2,6 +2,16 @@ FROM n8nio/n8n:1
 # FROM n8nio/n8n:latest
 USER root
 
+# === RESTORE apk-tools (REQUIRED since n8n 2.1.0+ hardened image) ===
+RUN ARCH=$(uname -m) && \
+    wget -qO- "http://dl-cdn.alpinelinux.org/alpine/latest-stable/main/${ARCH}/" | \
+    grep -o 'href="apk-tools-static-[^"]*\.apk"' | head -1 | cut -d'"' -f2 | \
+    xargs -I {} wget -q "http://dl-cdn.alpinelinux.org/alpine/latest-stable/main/${ARCH}/{}" && \
+    tar -xzf apk-tools-static-*.apk && \
+    ./sbin/apk.static -X http://dl-cdn.alpinelinux.org/alpine/latest-stable/main \
+        -U --allow-untrusted add apk-tools && \
+    rm -rf sbin apk-tools-static-*.apk
+
 # Install ffmpeg and enhanced media processing tools + nodejs & npm for n8n community nodes
 RUN apk add --no-cache \
     ffmpeg \
