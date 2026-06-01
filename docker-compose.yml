@@ -301,7 +301,8 @@ services:
       - host.docker.internal:host-gateway
 
   n8n-runner:
-    image: n8nio/runners:${N8N_RUNNERS_VERSION}
+    image: n8nio/runners:1
+    # image: n8nio/runners:${N8N_RUNNERS_VERSION}
     container_name: n8n-runner
     profiles: ["n8n"]
     restart: unless-stopped
