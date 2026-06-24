@@ -41,3 +41,82 @@ chatterbox-frontend/
 website/
 vexa/
 volumes/
+
+# Environment secrets
+.env
+
+# Python cache
+__pycache__/
+*.pyc
+
+# macOS
+.DS_Store
+
+# Node.js
+node_modules/
+
+# n8n
+.n8n/
+
+# Logs
+*.log
+
+# IDE
+.idea/
+.vscode/
+
+.png
+
+node_modules/
+
+dist/
+
+build/
+
+.env
+
+.env.local
+
+*.log
+
+.DS_Store
+
+coverage/
+
+.nyc_output/
+
+__pycache__/
+
+*.pyc
+
+.venv/
+
+venv/
+
+.env
+
+.pytest_cache/
+
+.mypy_cache/
+
+.ruff_cache/
+
+*.egg-info/
+
+dist/
+
+build/
+
+.DS_Store
+
+Thumbs.db
+
+*.swp
+
+*.swo
+
+.idea/        # JetBrains
+
+.vscode/      # optional — many teams commit this
+
+*.log
