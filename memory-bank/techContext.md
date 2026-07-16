@@ -1,5 +1,7 @@
 # n8n-installer Technical Context
 
+> **Note (2026-07-14):** Historical record from the pre-fork `n8n-installer` era. Core infrastructure (Docker Compose, Caddy, Postgres, Redis, Python utility) still applies to AI LaunchKit, but many services have been added since. See `AGENTS.md` for current technical stack.
+
 ## Technology Stack
 
 ### Core Infrastructure

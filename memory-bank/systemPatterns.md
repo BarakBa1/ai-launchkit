@@ -1,5 +1,7 @@
 # n8n-installer System Patterns
 
+> **Note (2026-07-14):** Historical record from the pre-fork `n8n-installer` era. Most patterns still apply to AI LaunchKit, but service counts and some specifics have changed. See `AGENTS.md` for current architecture.
+
 ## Architectural Patterns
 
 ### Container Orchestration Pattern

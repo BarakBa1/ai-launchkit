@@ -415,5 +415,5 @@ If you need help adding a service:
 
 ---
 
-*Last updated: August 2025 - AI LaunchKit v1.0*  
+*Last reviewed: 2026-07-14 (current tag: v1.18.0)*  
 *Based on the original [n8n-installer](https://github.com/kossakovsky/n8n-installer) documentation*

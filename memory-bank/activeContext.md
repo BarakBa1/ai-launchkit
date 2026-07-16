@@ -1,5 +1,7 @@
 # Active Context - Memory Bank Ready
 
+> **Note (2026-07-14):** This file is a historical record from the pre-fork `n8n-installer` era (last updated 2025-01-17). The project is now AI LaunchKit with significantly more services. See `AGENTS.md` for current state.
+
 ## Current Phase
 **READY FOR NEW TASK** - Archive Phase Complete
 

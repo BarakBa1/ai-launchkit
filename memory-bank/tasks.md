@@ -1,5 +1,7 @@
 # Tasks - n8n-installer Project
 
+> **Note (2026-07-14):** Historical task records from the pre-fork `n8n-installer` era (Dify 2025-01-17, Portainer 2025-08-08, ComfyUI pending in this snapshot). Project is now AI LaunchKit; not all tasks listed here are reflected in the current `docker-compose.yml` (e.g. Dify never landed in the main compose file). See `AGENTS.md` for current service catalog.
+
 ## Current Task Status
 **Active Task**: Dify AI Platform Integration - REFLECTION COMPLETE
 

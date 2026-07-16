@@ -1,5 +1,7 @@
 # n8n-installer Product Context
 
+> **Note (2026-07-14):** Historical record from the pre-fork `n8n-installer` era. Project is now AI LaunchKit. See `README.md` for current product description and service catalog.
+
 ## Product Vision
 Create a comprehensive, self-hosted AI workshop that democratizes access to powerful automation and AI tools, giving users complete control over their data and workflows while maintaining enterprise-grade capabilities.
 

@@ -1,5 +1,7 @@
 # n8n-installer Project Brief
 
+> **Note (2026-07-14):** Historical record from the pre-fork `n8n-installer` era. Project is now AI LaunchKit. See `AGENTS.md` and `README.md` for current scope, services, and architecture.
+
 ## Project Overview
 The **n8n-installer** is an open-source Docker Compose template designed to significantly simplify setting up a comprehensive, self-hosted environment for n8n and Flowise. It bundles essential supporting tools for AI development, automation, and monitoring.
 

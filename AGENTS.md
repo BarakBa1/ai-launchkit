@@ -8,13 +8,13 @@ This is **AI LaunchKit**: a comprehensive Docker Compose-based toolkit that crea
 
 ### Core Features
 
-- **AI Development Tools**: bolt.diy, OpenHands, OpenUI, ComfyUI, Dify
+- **AI Development Tools**: bolt.diy, OpenUI, ComfyUI, Flowise
 - **Automation Platform**: n8n with 300+ pre-configured workflows, Flowise
 - **LLM Infrastructure**: Ollama, Open WebUI, Letta
-- **Vector Databases**: Qdrant, Supabase (with pgvector)
+- **Vector Databases**: Qdrant, Weaviate, LightRAG (graph RAG)
 - **Monitoring & Observability**: Langfuse, Grafana, Prometheus
 - **Media Processing**: ComfyUI (Stable Diffusion), Speech Stack (Whisper STT, OpenedAI TTS)
-- **Development Tools**: SearXNG, Crawl4ai, browserless (planned), LiveKit (planned)
+- **Development Tools**: SearXNG, Crawl4ai, browserless (browser-suite profile), LiveKit
 
 ## Essential Commands
 
@@ -28,7 +28,7 @@ sudo bash ./scripts/install.sh
 sudo bash ./scripts/update.sh
 
 # Clean up unused Docker resources
-sudo bash ./scripts/cleanup.sh
+sudo bash ./scripts/docker_cleanup.sh
 ```
 
 ### Docker Operations
@@ -90,12 +90,11 @@ The installation follows a strict 6-step sequence managed by `scripts/install.sh
 ### Key Service Dependencies
 
 - **n8n**: Requires postgres, redis. Runs in queue mode with configurable worker count
-- **Supabase**: Full stack with postgres, auth, storage, analytics, edge functions
 - **Langfuse**: Requires postgres, redis, clickhouse, minio for LLM observability
 - **Open WebUI**: Integrates with Ollama for local LLMs
 - **ComfyUI**: Requires models downloaded separately (FLUX, SDXL, etc.)
 - **bolt.diy**: Standalone AI-powered full-stack development platform
-- **OpenHands**: AI software engineer with web interface
+- **Vexa**: Real-time meeting transcription; cloned by `scripts/04a_setup_vexa.sh` into `vexa/` directory; runs as external compose project (not in main docker-compose.yml)
 
 ## Important Implementation Details
 
@@ -214,14 +213,13 @@ The installation follows a strict 6-step sequence managed by `scripts/install.sh
 ### Development Platforms
 
 - **bolt.diy**: Full-stack development with AI assistance
-- **OpenHands**: Autonomous coding agent with web interface
 - **OpenUI**: AI-powered UI component generator
 
-### Planned Additions
+### LiveKit Real-Time Communication
 
-- **LiveKit**: Real-time communication and AI agents
-- **browserless**: Headless Chrome for web automation
-- **PaddleOCR**: Document OCR processing
+- LiveKit server + LiveKit agents are available behind the `livekit` profile
+- Requires UDP 50000-50100 for WebRTC media
+- Token generation helper: `scripts/generate_livekit_token.sh`
 
 ## Critical Implementation Notes
 

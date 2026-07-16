@@ -1,5 +1,7 @@
 # n8n-installer Project Progress
 
+> **Note (2026-07-14):** Historical record from the pre-fork `n8n-installer` era (entries dated 2025-01-09 and 2025-01-17). Project is now AI LaunchKit. See `AGENTS.md` and `README.md` for current state.
+
 ## Current Task: —
 
 ### Implementation Progress
