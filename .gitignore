@@ -122,13 +122,3 @@ Thumbs.db
 *.log
 
 # ============================================================
-# Repomix packed output
-# ============================================================
-# `npx repomix` packs this repo into a single XML for LLM
-# consumption. The output is regenerable and not source-controlled.
-# Regenerated automatically by .githooks/post-commit after each
-# commit; see docs/repomix.md at the workspace root.
-# ============================================================
-/repomix-ai-launchkit.xml
-/repomix-output.xml
-/repomix-*.xml
