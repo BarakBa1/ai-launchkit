@@ -20,7 +20,7 @@ After AI LaunchKit installation, Cal.com is available at `https://cal.yourdomain
 ### Email Configuration
 Cal.com uses AI LaunchKit's mail system automatically:
 - **Development**: Mailpit captures all emails locally
-- **Production**: Postal sends real emails (requires DNS setup)
+- **Production**: Configure an operator-approved authenticated SMTP relay with the required DNS records.
 
 ## Google Calendar Integration
 
@@ -218,7 +218,7 @@ For paid bookings:
 **Solution**:
 1. Check mail mode: `grep MAIL_MODE .env`
 2. For development: Check Mailpit at `https://mail.yourdomain.com`
-3. For production: Ensure Postal is configured with proper DNS
+3. For production: verify the configured SMTP relay, sender domain, SPF, DKIM, and DMARC.
 
 ### Debug Commands
 
@@ -268,8 +268,8 @@ MS_GRAPH_CLIENT_SECRET=
 
 # Email Configuration (uses AI LaunchKit mail system)
 EMAIL_FROM=noreply@yourdomain.com
-EMAIL_SERVER_HOST=mailpit  # or postal for production
-EMAIL_SERVER_PORT=1025      # or 25 for postal
+EMAIL_SERVER_HOST=mailpit  # replace with the approved SMTP relay in production
+EMAIL_SERVER_PORT=1025     # replace with the relay's required port
 ```
 
 ### Performance Tuning

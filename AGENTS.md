@@ -1,252 +1,93 @@
-# AGENTS.md
+# AGENTS.md — AI LaunchKit
 
-This file provides guidance to AI assistants when working with code in this repository.
+Repository-specific guidance for the operator-owned infrastructure fork. Read
+[`C:\GitHub\AGENTS.md`](../AGENTS.md) first.
 
-## Project Overview
+## Authority and state boundaries
 
-This is **AI LaunchKit**: a comprehensive Docker Compose-based toolkit that creates a complete self-hosted AI development and automation environment. It transforms any Ubuntu server into a powerful AI development platform with 20+ pre-configured services that can be selectively deployed with a single command.
+- `origin` is `BarakBa1/ai-launchkit`; `freddy-schuetz/ai-launchkit` is upstream
+  lineage.
+- Local Compose/scripts are the intended-state source. They do not prove what
+  currently runs on the VPS.
+- Production host reads/writes require exact user authorization. Any production
+  n8n VPS modification also follows workspace rule V1.
+- AI4TRADE workflows and prompts belong to `../ai-n8n-trading/`, not this repo.
 
-### Core Features
+## Documentation map
 
-- **AI Development Tools**: bolt.diy, OpenUI, ComfyUI, Flowise
-- **Automation Platform**: n8n with 300+ pre-configured workflows, Flowise
-- **LLM Infrastructure**: Ollama, Open WebUI, Letta
-- **Vector Databases**: Qdrant, Weaviate, LightRAG (graph RAG)
-- **Monitoring & Observability**: Langfuse, Grafana, Prometheus
-- **Media Processing**: ComfyUI (Stable Diffusion), Speech Stack (Whisper STT, OpenedAI TTS)
-- **Development Tools**: SearXNG, Crawl4ai, browserless (browser-suite profile), LiveKit
+- [README.md](README.md) — concise operator overview.
+- [docs/README.md](docs/README.md) — maintained runbooks and historical context.
+- [ADDING_NEW_SERVICE.md](ADDING_NEW_SERVICE.md) — service-integration checklist.
+- [docker-compose.yml](docker-compose.yml) — authoritative services, profiles,
+  dependencies, ports, volumes, and health checks.
+- `scripts/` — authoritative install/update lifecycle.
 
-## Essential Commands
+Do not infer current behavior from the removed generated service encyclopedia
+or completed memory-bank task journals; use code and current runbooks.
 
-### Installation and Updates
+## Safety
 
-```bash
-# Main installation (from project root)
-sudo bash ./scripts/install.sh
-
-# Update all services to latest versions
-sudo bash ./scripts/update.sh
-
-# Clean up unused Docker resources
-sudo bash ./scripts/docker_cleanup.sh
-```
-
-### Docker Operations
-
-```bash
-# View running services
-docker compose ps
-
-# View logs for specific service
-docker compose logs [service-name]
-
-# Restart services with specific profiles
-docker compose --profile n8n --profile ai-dev up -d
-
-# Stop all services
-docker compose down
-```
-
-### Python Helper Script
-
-```bash
-# Start services with automatic profile detection
-python3 start_services.py
-```
-
-### Service Management
-
-```bash
-# Apply configuration updates to running services
-sudo bash ./scripts/apply_update.sh
-
-# View all available Docker Compose profiles
-grep -E '^\s*profiles:' docker-compose.yml
-
-# Check service health status
-docker compose ps --format "table {{.Name}}\t{{.Status}}\t{{.Ports}}"
-```
+- Never read or display `.env` values. Use `.env.example` for variable names.
+- Never commit credentials, tokens, certificates, private keys, generated
+  runtime directories, backups, or dependency output.
+- Before destructive Docker/volume operations, identify exact targets, capture
+  backups, explain data loss, and obtain explicit approval.
+- Do not add dependencies without user approval.
+- Preserve unrelated working-tree changes.
 
 ## Architecture
 
-### Core Installation Flow
+Installation is orchestrated by `scripts/install.sh` and the numbered scripts:
 
-The installation follows a strict 6-step sequence managed by `scripts/install.sh`:
+1. system preparation;
+2. Docker installation;
+3. secret/environment generation;
+4. profile selection and optional setup helpers;
+5. service startup and optional initialization helpers;
+6. final report.
 
-1. **01_system_preparation.sh** - Updates system, installs dependencies, configures security
-2. **02_install_docker.sh** - Installs Docker Engine and Docker Compose
-3. **03_generate_secrets.sh** - Creates .env file with secure passwords and keys
-4. **04_wizard.sh** - Interactive service selection with whiptail UI (20+ services)
-5. **05_run_services.sh** - Deploys selected services using Docker Compose profiles
-6. **06_final_report.sh** - Displays access URLs and credentials
+Compose profiles select optional services. Shared patterns include Caddy
+routing, named volumes, health checks, explicit dependencies, and internal
+Docker DNS. Vexa is an external cloned Compose project managed by
+`04a_setup_vexa.sh` and `05a_init_vexa.sh`, not a service in the main Compose
+file.
 
-### Docker Compose Architecture
+## Change workflow
 
-- **Profiles**: Services organized into logical groups (n8n, ai-dev, monitoring, langfuse, ollama, speech, etc.)
-- **Environment**: All configuration through `.env` file generated during installation
-- **Volumes**: Named volumes for data persistence across container rebuilds
-- **Networks**: All services on default Docker network with internal service discovery
+1. Read the current Compose service and adjacent analogous service.
+2. Map required changes across `docker-compose.yml`, `.env.example`,
+   `scripts/04_wizard.sh`, Caddy configuration, setup/init scripts, and docs.
+3. Reuse `scripts/utils.sh` logging and existing idempotency patterns.
+4. Define profiles, dependencies, health checks, volumes, resource needs,
+   public exposure, backup, and rollback.
+5. Validate on Linux:
 
-### Key Service Dependencies
+   ```bash
+   bash -n scripts/*.sh
+   docker compose config --quiet
+   docker compose config --profiles
+   ```
 
-- **n8n**: Requires postgres, redis. Runs in queue mode with configurable worker count
-- **Langfuse**: Requires postgres, redis, clickhouse, minio for LLM observability
-- **Open WebUI**: Integrates with Ollama for local LLMs
-- **ComfyUI**: Requires models downloaded separately (FLUX, SDXL, etc.)
-- **bolt.diy**: Standalone AI-powered full-stack development platform
-- **Vexa**: Real-time meeting transcription; cloned by `scripts/04a_setup_vexa.sh` into `vexa/` directory; runs as external compose project (not in main docker-compose.yml)
+6. Test the smallest affected profile set and inspect health/logs.
+7. Update [docs/README.md](docs/README.md) and focused runbooks. Do not duplicate
+   the complete service catalog in prose.
 
-## Important Implementation Details
+## Operations
 
-### Environment Variable System
+```bash
+sudo bash ./scripts/install.sh
+sudo bash ./scripts/update.sh
+sudo bash ./scripts/apply_update.sh
+sudo bash ./scripts/docker_cleanup.sh
+docker compose ps
+docker compose logs --tail=200 <service>
+```
 
-- Generated by `03_generate_secrets.sh` using `openssl rand -hex`
-- Contains service hostnames, passwords, API keys
-- Used by both Docker Compose and Caddy for routing
-- AI-specific keys: OPENAI_API_KEY, ANTHROPIC_API_KEY, etc.
+`docker compose down -v`, volume removal, reset/reinstall, firewall changes, and
+production restarts are destructive or availability-affecting and require
+explicit scope/approval.
 
-### Service Selection Wizard
+## Git
 
-- `04_wizard.sh` uses whiptail to create interactive checklist
-- Updates `COMPOSE_PROFILES` in `.env` based on selections
-- Service dependencies automatically handled
-- Grouped by category: AI Development, Automation, Databases, Monitoring
-
-### Shared File Access
-
-- `./shared/` directory is mounted to `/data/shared` in containers
-- Use this path in n8n workflows and AI tools to share files
-- Persistent storage for generated content (images, documents, models)
-
-### AI Service Configuration
-
-- **ComfyUI**: Models stored in `/var/lib/docker/volumes/localai_comfyui_data/_data/models/`
-- **Ollama**: Models persist in `ollama_data` volume
-- **Speech Stack**: Uses ports 8001 (Whisper) and 5001 (TTS)
-- **Vector DBs**: Qdrant on port 6333, Supabase includes pgvector
-
-### Custom n8n Configuration
-
-- Pre-installs Node.js libraries: cheerio, axios, moment, lodash
-- Runs in production mode with PostgreSQL backend
-- Queue mode for parallel workflow processing
-- Community packages and AI runners enabled
-- Configured for tool usage and external function calls
-- Metrics enabled for Prometheus monitoring
-
-### Network Architecture
-
-- Caddy handles HTTPS/TLS termination and reverse proxy
-- Services exposed via subdomains: n8n.domain.com, comfyui.domain.com, etc.
-- Internal services (redis, postgres) not exposed externally
-- Supports Cloudflare Tunnel as alternative to port exposure
-- sslip.io domains work without DNS configuration
-
-## Common Development Tasks
-
-### Testing Profile Changes
-
-1. Update `COMPOSE_PROFILES` in `.env`
-2. Run `docker compose --profile [profiles] up -d`
-3. Check `docker compose ps` to verify services started
-
-### Adding New AI Services
-
-1. Define service in `docker-compose.yml` with appropriate profile
-2. Add hostname variables to Caddy environment section
-3. Update `04_wizard.sh` to include in service selection
-4. Add Caddyfile routing if service needs web access
-5. Consider GPU requirements and volume mounts
-6. Document API endpoints and integration points
-
-### Working with AI Models
-
-- ComfyUI models: Download to model directories before use
-- Ollama models: Pull with `docker exec ollama ollama pull [model]`
-- Embeddings: Configure in n8n AI nodes or Flowise chains
-- Vector stores: Initialize indexes in Qdrant or Supabase
-
-### Backup/Restore
-
-- n8n workflows: `./n8n/backup/workflows/`
-- ComfyUI workflows: Export from UI
-- Vector databases: Use respective backup tools
-- All data in Docker volumes: `docker run --rm -v [volume]:/data -v $(pwd):/backup busybox tar czf /backup/[name].tar.gz -C /data .`
-
-### Troubleshooting AI Services
-
-1. Check service logs: `docker compose logs [service-name] -f`
-2. Verify GPU access (if applicable): `docker exec [container] nvidia-smi`
-3. Monitor resource usage: `docker stats`
-4. Check model loading: Service-specific logs
-5. API connectivity: Test with curl or service UI
-
-## Security Considerations
-
-- All services require authentication (configured during setup)
-- Firewall configured to only allow SSH, HTTP, HTTPS
-- Fail2Ban enabled for brute-force protection
-- SSL certificates managed by Caddy with Let's Encrypt
-- API keys stored in `.env` file (never commit to git)
-- Services isolated in Docker network namespaces
-- Regular security updates via `update.sh`
-
-## File Structure Notes
-
-- `memory-bank/` - Project documentation and development notes
-- `flowise/` - Flowise workflow templates and custom tools
-- `n8n/` - n8n configurations and community workflows
-- `comfyui/` - ComfyUI custom nodes and workflows (if added)
-- `scripts/` - Installation and utility scripts (all bash)
-- `shared/` - Shared directory accessible by all containers
-- `openedai-config/` - TTS voice configurations
-- `openedai-voices/` - Custom TTS voice models
-
-## AI LaunchKit Specific Features
-
-### Speech Stack Integration
-
-- **Whisper (STT)**: OpenAI-compatible API on port 8001
-- **OpenedAI (TTS)**: Multiple voices, OpenAI-compatible API on port 5001
-- Both services integrate seamlessly with n8n HTTP nodes
-
-### Development Platforms
-
-- **bolt.diy**: Full-stack development with AI assistance
-- **OpenUI**: AI-powered UI component generator
-
-### LiveKit Real-Time Communication
-
-- LiveKit server + LiveKit agents are available behind the `livekit` profile
-- Requires UDP 50000-50100 for WebRTC media
-- Token generation helper: `scripts/generate_livekit_token.sh`
-
-## Critical Implementation Notes
-
-- Never modify the installation script sequence (01-06) without understanding dependencies
-- Always use logging functions from `utils.sh` in new scripts
-- The `.env` file contains all secrets and must never be committed
-- Services use Docker health checks - respect dependency conditions
-- Profile-based deployment allows selective service activation
-- When modifying `docker-compose.yml`, maintain the x-templates pattern
-- AI services may require significant resources (RAM, disk, GPU)
-- Community workflows are imported during installation (20-30 minutes)
-- Model downloads for ComfyUI/Ollama happen post-installation
-- Test AI integrations with small workloads before scaling
-
-## Contributing Guidelines
-
-When contributing new AI services or features:
-
-1. Follow existing patterns in docker-compose.yml
-2. Add comprehensive health checks
-3. Document resource requirements
-4. Include example workflows or usage
-5. Test with minimal and full installations
-6. Update this AGENTS.md file with relevant information [edited 2026-06-24: file was renamed from CLAUDE.md to AGENTS.md]
-
-## Useful Resources
-
-- Repository: https://github.com/freddy-schuetz/ai-launchkit
-- Based on: n8n-installer by @kossakovsky
-- License: Apache 2.0 (commercial use allowed)
+Follow workspace Git safety. Never commit/push automatically, force-push a
+protected branch, or run `git reset --hard` without explicit confirmation.
