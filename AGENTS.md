@@ -3,6 +3,10 @@
 Repository-specific guidance for the operator-owned infrastructure fork. Read
 [`C:\GitHub\AGENTS.md`](../AGENTS.md) first.
 
+## n8n version requirement — n8n 1.* only
+
+The `n8n` profile this fork provisions must run **n8n 1.*** with Pyodide-based Python Code nodes. AI4TRADE workflows that run on top of this fork are not compatible with n8n 2.* (which switches to the native task runner / `typeVersion: 3` Code node and drops Pyodide). Keep `docker-compose.yml` pinned to `n8nio/n8n:1` (not `:latest`, not `:2`); keep `N8N_NATIVE_PYTHON_RUNNER: false`. An n8n 1.* to 2.* upgrade is **not** planned — see [`../ai-n8n-trading/docs/migration/README.md`](../ai-n8n-trading/docs/migration/README.md) and [`../ai-n8n-trading/README.md`](../ai-n8n-trading/README.md).
+
 ## Authority and state boundaries
 
 - `origin` is `BarakBa1/ai-launchkit`; `freddy-schuetz/ai-launchkit` is upstream
