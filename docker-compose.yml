@@ -2783,7 +2783,9 @@ services:
 
   # n8n-MCP - Model Context Protocol Server
   n8n-mcp:
-    image: ghcr.io/czlonkowski/n8n-mcp:v2.63.2
+    build:
+      context: https://github.com/czlonkowski/n8n-mcp.git
+      dockerfile: Dockerfile
     container_name: n8n-mcp
     profiles: ["n8n-mcp"]
     restart: unless-stopped
