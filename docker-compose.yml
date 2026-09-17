@@ -623,6 +623,10 @@ services:
       LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS: ${LANGFUSE_INGESTION_CLICKHOUSE_WRITE_INTERVAL_MS:-}
       REDIS_HOST: ${REDIS_HOST:-redis}
       REDIS_PORT: ${REDIS_PORT:-6379}
+      # Langfuse 3.x stringifies an absent REDIS_AUTH in its REDIS_HOST path.
+      # Select its supported connection-string path for this passwordless Valkey.
+      # Set REDIS_CONNECTION_STRING explicitly for an authenticated or TLS Redis.
+      REDIS_CONNECTION_STRING: ${REDIS_CONNECTION_STRING:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
       REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
       REDIS_TLS_CA: ${REDIS_TLS_CA:-/certs/ca.crt}
       REDIS_TLS_CERT: ${REDIS_TLS_CERT:-/certs/redis.crt}
