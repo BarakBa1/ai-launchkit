@@ -3,10 +3,23 @@ import subprocess
 import unittest
 import os
 import json
+import sys
 import tempfile
 import threading
+import types
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from unittest.mock import patch
 from pathlib import Path
+
+try:
+    import start_services
+except ModuleNotFoundError as error:
+    if error.name != "dotenv":
+        raise
+    dotenv_stub = types.ModuleType("dotenv")
+    dotenv_stub.dotenv_values = lambda *_args, **_kwargs: {}
+    sys.modules["dotenv"] = dotenv_stub
+    import start_services
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
@@ -110,6 +123,7 @@ class N8nApiKeyContractTest(unittest.TestCase):
                 f'else printf "\\n__curl_called=0\\n"; fi; exit "$rc"'
             )
             environment["N8N_API_KEY"] = key
+            environment["N8N_API_KEY_LIVE_RETRY_DELAY_SECONDS"] = "0"
             return subprocess.run(
                 [bash_executable(), "-c", command],
                 cwd=REPOSITORY_ROOT,
@@ -252,6 +266,20 @@ class N8nApiKeyContractTest(unittest.TestCase):
         output = result.stdout + result.stderr
         self.assertIn("N8N_URL", output)
         self.assertIn("__curl_called=0", output)
+
+    def test_live_check_rejects_unreachable_public_url_without_echo(self):
+        shaped_jwt = (
+            "eyJhbGciOiJIUzI1NiJ9."
+            "eyJhdWQiOiJwdWJsaWMtYXBpIn0."
+            "shaped-only-signature"
+        )
+        result = self.run_live_validator(
+            "n8n-mcp", shaped_jwt, "https://n8n.example.test", curl_exit=7
+        )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(shaped_jwt, result.stdout + result.stderr)
+        self.assertIn("network error", result.stdout + result.stderr)
 
     def test_live_check_skips_api_probe_for_base_profiles(self):
         result = self.run_live_validator("n8n", "not-a-jwt", "", status="401")
@@ -520,6 +548,107 @@ class N8nApiKeyContractTest(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertTrue(marker_path.exists())
             self.assertGreaterEqual(observations["requests"], 2)
+
+    def test_installer_public_preflight_rejects_failed_mcp_validation(self):
+        self.assertTrue(
+            hasattr(start_services, "run_n8n_mcp_public_preflight"),
+            "installer lacks the authoritative n8n-mcp public preflight",
+        )
+        env_values = {
+            "COMPOSE_PROFILES": "n8n,n8n-mcp",
+            "N8N_API_KEY": "synthetic-installer-key",
+            "N8N_URL": "https://n8n.example.test",
+        }
+        failed = subprocess.CompletedProcess([], 1)
+
+        with patch.object(start_services.subprocess, "run", return_value=failed) as run:
+            with self.assertRaises(subprocess.CalledProcessError):
+                start_services.run_n8n_mcp_public_preflight(env_values)
+
+        command = run.call_args.args[0]
+        self.assertNotIn(env_values["N8N_API_KEY"], command)
+        self.assertIn("$N8N_URL", command[-1])
+        self.assertEqual(run.call_args.kwargs["env"]["N8N_API_KEY"], env_values["N8N_API_KEY"])
+
+    def test_installer_public_preflight_skips_base_profiles(self):
+        self.assertTrue(
+            hasattr(start_services, "run_n8n_mcp_public_preflight"),
+            "installer lacks the authoritative n8n-mcp public preflight",
+        )
+        with patch.object(start_services.subprocess, "run") as run:
+            start_services.run_n8n_mcp_public_preflight(
+                {"COMPOSE_PROFILES": "n8n", "N8N_API_KEY": "", "N8N_URL": ""}
+            )
+
+        run.assert_not_called()
+
+    def test_installer_orders_core_readiness_public_preflight_then_full_launch(self):
+        self.assertTrue(
+            hasattr(start_services, "run_n8n_mcp_public_preflight"),
+            "installer lacks the authoritative n8n-mcp public preflight",
+        )
+        env_values = {
+            "COMPOSE_PROFILES": "n8n,n8n-mcp",
+            "N8N_API_KEY": "synthetic-installer-key",
+            "N8N_URL": "https://n8n.example.test",
+        }
+        with patch.object(start_services, "dotenv_values", return_value=env_values), \
+             patch.object(start_services, "run_command") as run_command, \
+             patch.object(start_services, "run_n8n_mcp_public_preflight") as preflight:
+            start_services.start_local_ai()
+
+        commands = [call.args[0] for call in run_command.call_args_list]
+        self.assertEqual(commands[0][0:6], ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml"])
+        self.assertIn("build", commands[0])
+        self.assertIn("--wait", commands[1])
+        self.assertIn("caddy", commands[1])
+        self.assertIn("n8n-import", commands[1])
+        self.assertIn("n8n", commands[1])
+        self.assertEqual(commands[-1][-2:], ["up", "-d"])
+        self.assertEqual(preflight.call_count, 1)
+
+    def test_installer_does_not_launch_full_stack_when_public_preflight_fails(self):
+        self.assertTrue(
+            hasattr(start_services, "run_n8n_mcp_public_preflight"),
+            "installer lacks the authoritative n8n-mcp public preflight",
+        )
+        env_values = {
+            "COMPOSE_PROFILES": "n8n,n8n-mcp",
+            "N8N_API_KEY": "synthetic-installer-key",
+            "N8N_URL": "https://n8n.example.test",
+        }
+        failure = subprocess.CalledProcessError(1, ["bash"])
+        with patch.object(start_services, "dotenv_values", return_value=env_values), \
+             patch.object(start_services, "run_command") as run_command, \
+             patch.object(
+                 start_services,
+                 "run_n8n_mcp_public_preflight",
+                 side_effect=failure,
+             ):
+            with self.assertRaises(subprocess.CalledProcessError):
+                start_services.start_local_ai()
+
+        commands = [call.args[0] for call in run_command.call_args_list]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("--wait", commands[-1])
+        self.assertIn("n8n", commands[-1])
+
+    def test_installer_base_profile_keeps_single_full_launch(self):
+        self.assertTrue(
+            hasattr(start_services, "run_n8n_mcp_public_preflight"),
+            "installer lacks the authoritative n8n-mcp public preflight",
+        )
+        env_values = {"COMPOSE_PROFILES": "n8n"}
+        with patch.object(start_services, "dotenv_values", return_value=env_values), \
+             patch.object(start_services, "run_command") as run_command, \
+             patch.object(start_services, "run_n8n_mcp_public_preflight") as preflight:
+            start_services.start_local_ai()
+
+        commands = [call.args[0] for call in run_command.call_args_list]
+        self.assertEqual(len(commands), 2)
+        self.assertIn("build", commands[0])
+        self.assertEqual(commands[1][-2:], ["up", "-d"])
+        preflight.assert_not_called()
 
     def run_compose_healthcheck(self, config, api_key, status):
         healthcheck = config["services"]["n8n-mcp"]["healthcheck"]["test"]

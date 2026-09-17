@@ -50,6 +50,44 @@ def run_command(cmd, cwd=None):
     print("Running:", " ".join(cmd))
     subprocess.run(cmd, cwd=cwd, check=True)
 
+
+def is_profile_selected(profiles, profile):
+    """Return whether a comma-separated Compose profile list selects profile."""
+    return profile in {
+        item.strip() for item in str(profiles or "").split(",") if item.strip()
+    }
+
+
+def run_n8n_mcp_public_preflight(env_values=None):
+    """Require the public n8n API to accept N8N_API_KEY before MCP launch."""
+    if env_values is None:
+        env_values = dotenv_values(".env")
+    profiles = env_values.get("COMPOSE_PROFILES", "")
+    if not is_profile_selected(profiles, "n8n-mcp"):
+        return
+
+    environment = os.environ.copy()
+    for key, value in env_values.items():
+        if value is not None:
+            environment[str(key)] = str(value)
+
+    # The helper reads N8N_API_KEY from its environment and sends the header
+    # through stdin, so this command contains no credential value.
+    command = [
+        "bash",
+        "-c",
+        'source scripts/utils.sh; '
+        'require_n8n_mcp_api_key_live "$COMPOSE_PROFILES" "$N8N_URL"',
+    ]
+    result = subprocess.run(
+        command,
+        cwd=os.getcwd(),
+        env=environment,
+        check=False,
+    )
+    if result.returncode != 0:
+        raise subprocess.CalledProcessError(result.returncode, command)
+
 def clone_supabase_repo():
     """Clone the Supabase repository using sparse checkout if not already present."""
     if not is_supabase_enabled():
@@ -309,15 +347,30 @@ def start_dify():
 def start_local_ai():
     """Start the local AI services (using its compose file)."""
     print("Starting local AI services...")
+    env_values = dotenv_values(".env")
+    mcp_enabled = is_profile_selected(
+        env_values.get("COMPOSE_PROFILES", ""), "n8n-mcp"
+    )
 
     # Explicitly build services and pull newer base images first.
     print("Checking for newer base images and building services...")
     build_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml", "build", "--pull"]
     run_command(build_cmd)
 
+    compose_base = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml"]
+    if mcp_enabled:
+        # Start core n8n and Caddy first. The n8n healthcheck gates this
+        # command's completion; the public API preflight then gates MCP.
+        print("Starting core n8n and Caddy before n8n-MCP validation...")
+        core_up_cmd = compose_base + [
+            "up", "-d", "--wait", "caddy", "n8n-import", "n8n"
+        ]
+        run_command(core_up_cmd)
+        run_n8n_mcp_public_preflight(env_values)
+
     # Now, start the services using the newly built images. No --build needed as we just built.
     print("Starting containers...")
-    up_cmd = ["docker", "compose", "-p", "localai", "-f", "docker-compose.yml", "up", "-d"]
+    up_cmd = compose_base + ["up", "-d"]
     run_command(up_cmd)
 
 def generate_searxng_secret_key():

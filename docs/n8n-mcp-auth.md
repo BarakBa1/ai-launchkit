@@ -12,15 +12,16 @@ The optional `n8n-mcp` Compose profile requires two different credentials:
 
 When `n8n-mcp` is selected, the generator, service-selection wizard, and
 service runner perform cheap fail-closed checks for JWT syntax, `public-api`
-audience, and any expiry claim. The authoritative check runs inside the
-`n8n-mcp` container only after Compose has started core n8n and observed its
-healthy state. Its bounded request to `N8N_API_URL/api/v1/workflows?limit=1`
-uses `X-N8N-API-KEY`; only a 2xx status passes. This ordering avoids a
-clean-install deadlock while ensuring the original MCP command cannot start or
-proxy until n8n accepts the key. The live API response is authoritative for
-signature, issuer, revocation, and server-side expiry checks. The checks do not
-print the supplied value. A blank `N8N_API_KEY` remains valid when `n8n-mcp` is
-not selected.
+audience, and any expiry claim. The installer then starts core n8n and Caddy,
+waits for n8n health, and makes a bounded HTTPS request to
+`N8N_URL/api/v1/workflows?limit=1` with `X-N8N-API-KEY`; only a 2xx status
+passes. This public API response is authoritative for signature, issuer,
+revocation, and server-side expiry checks. Only after that preflight passes does
+the installer launch the full selected stack. The n8n-MCP entrypoint repeats an
+authoritative check against the internal healthy n8n API before starting the
+original MCP command, providing defense in depth for direct Compose activation.
+The checks do not print the supplied value. A blank `N8N_API_KEY` remains valid
+when `n8n-mcp` is not selected.
 
 If validation fails, set the value in the runtime `.env` from n8n's API-key
 settings and rerun the wizard. Never paste either credential into logs,
@@ -28,7 +29,7 @@ documentation, or source control. Compose keeps the two values mapped to
 separate environment variables in the `n8n-mcp` service.
 
 The Compose healthcheck reports only the already-started MCP process; the
-entrypoint gate owns the missing-key and public-API status guard. Thus direct
-`docker compose --profile n8n-mcp up` activation starts core n8n first and
-cannot start or proxy a healthy MCP process with a missing, forged, or rejected
-API key.
+entrypoint gate owns the missing-key and internal public-API status guard. Thus
+direct `docker compose --profile n8n-mcp up` activation starts core n8n first
+and cannot start or proxy a healthy MCP process with a missing, forged, or
+rejected API key.

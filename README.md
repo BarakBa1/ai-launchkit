@@ -70,9 +70,11 @@ manual encyclopedia.
   generated inbound n8n-MCP token. If the `n8n-mcp` profile is selected, the
   latter must be a public API JWT issued by n8n under Settings -> API; the
   generator, wizard, and service runner reject missing or malformed values.
-  Compose starts core n8n first and the n8n-MCP entrypoint authoritatively
-  verifies the key against the healthy n8n API before starting the original MCP
-  command. A blank `N8N_API_KEY` is valid when that profile is unused.
+  The installer starts core n8n first, validates the key through the bounded
+  public `N8N_URL` preflight, and only then launches the full selected stack;
+  the n8n-MCP entrypoint repeats an authoritative check against healthy n8n
+  before starting the original MCP command. A blank `N8N_API_KEY` is valid when
+  that profile is unused.
 - Prefer service-to-service Docker networking. Expose only required public
   routes through Caddy or an explicitly designed Cloudflare Tunnel.
 - A Cloudflare Tunnel can bypass Caddy protections; read

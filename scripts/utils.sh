@@ -129,6 +129,10 @@ require_n8n_mcp_api_key_live() {
     local profiles="${1:-}"
     local n8n_url="${2:-}"
     local key="${N8N_API_KEY:-}"
+    local attempt=0
+    local curl_exit_code=0
+    local retry_delay="${N8N_API_KEY_LIVE_RETRY_DELAY_SECONDS:-5}"
+    local max_attempts=12
     local n8n_url_host=""
     local api_url=""
     local api_status=""
@@ -150,24 +154,48 @@ require_n8n_mcp_api_key_live() {
     fi
 
     api_url="${n8n_url%/}/api/v1/workflows?limit=1"
-    # Feed the header through stdin so the key never appears in curl's
-    # process arguments. curl still reads the value from the environment-backed
-    # shell variable, and only its status code is captured.
-    api_status=$(printf '%s\n' "X-N8N-API-KEY: $key" | curl \
-        --silent \
-        --output /dev/null \
-        --write-out '%{http_code}' \
-        --connect-timeout 5 \
-        --max-time 10 \
-        --header @- \
-        "$api_url" 2>/dev/null) || {
-        log_error "N8N_API_KEY live validation failed due to an n8n API network error."
-        return 1
-    }
-
-    if [[ "$api_status" =~ ^2[0-9][0-9]$ ]]; then
-        return 0
+    if ! [[ "$retry_delay" =~ ^[0-9]+$ ]] || (( retry_delay > 60 )); then
+        retry_delay=5
     fi
+
+    while (( attempt < max_attempts )); do
+        attempt=$((attempt + 1))
+        # Feed the header through stdin so the key never appears in curl's
+        # process arguments. curl still reads the value from the environment-backed
+        # shell variable, and only its status code is captured.
+        curl_exit_code=0
+        api_status=$(printf '%s\n' "X-N8N-API-KEY: $key" | curl \
+            --silent \
+            --output /dev/null \
+            --write-out '%{http_code}' \
+            --connect-timeout 5 \
+            --max-time 10 \
+            --header @- \
+            "$api_url" 2>/dev/null) || curl_exit_code=$?
+
+        if (( curl_exit_code != 0 )); then
+            if (( attempt < max_attempts )); then
+                (( retry_delay > 0 )) && sleep "$retry_delay"
+                continue
+            fi
+            log_error "N8N_API_KEY live validation failed due to an n8n API network error."
+            return 1
+        fi
+
+        if [[ "$api_status" =~ ^2[0-9][0-9]$ ]]; then
+            return 0
+        fi
+
+        if [[ "$api_status" == "401" || "$api_status" == "403" ]]; then
+            log_error "N8N_API_KEY live validation failed against the n8n API (HTTP ${api_status})."
+            return 1
+        fi
+
+        if (( attempt < max_attempts )); then
+            (( retry_delay > 0 )) && sleep "$retry_delay"
+            continue
+        fi
+    done
 
     log_error "N8N_API_KEY live validation failed against the n8n API (HTTP ${api_status:-unknown})."
     return 1
