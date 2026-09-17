@@ -573,7 +573,9 @@ services:
         max-file: "1"
 
   langfuse-worker:
-    image: langfuse/langfuse-worker:3
+    # Keep the Langfuse 3.x workaround reproducible; update this digest only
+    # after a disposable passwordless-Valkey rehearsal and rollback review.
+    image: langfuse/langfuse-worker:3.177.1@sha256:a578e58e241e3a1507214c6628d272ce806134840345373048039a088b661356
     restart: always
     profiles: ["langfuse"]
     depends_on: &langfuse-depends-on
@@ -626,14 +628,17 @@ services:
       # Langfuse 3.x stringifies an absent REDIS_AUTH in its REDIS_HOST path.
       # Select its supported connection-string path for this passwordless Valkey.
       # Set REDIS_CONNECTION_STRING explicitly for an authenticated or TLS Redis.
+      # Keep this fallback in the shared anchor: langfuse-web inherits it, and
+      # an unset or empty parent value must not select the REDIS_HOST auth path.
       REDIS_CONNECTION_STRING: ${REDIS_CONNECTION_STRING:-redis://${REDIS_HOST:-redis}:${REDIS_PORT:-6379}}
       REDIS_TLS_ENABLED: ${REDIS_TLS_ENABLED:-false}
-      REDIS_TLS_CA: ${REDIS_TLS_CA:-/certs/ca.crt}
-      REDIS_TLS_CERT: ${REDIS_TLS_CERT:-/certs/redis.crt}
-      REDIS_TLS_KEY: ${REDIS_TLS_KEY:-/certs/redis.key}
+      REDIS_TLS_CA_PATH: ${REDIS_TLS_CA_PATH:-/certs/ca.crt}
+      REDIS_TLS_CERT_PATH: ${REDIS_TLS_CERT_PATH:-/certs/redis.crt}
+      REDIS_TLS_KEY_PATH: ${REDIS_TLS_KEY_PATH:-/certs/redis.key}
 
   langfuse-web:
-    image: langfuse/langfuse:3
+    # Keep web and worker on the same tested Langfuse 3.177.1 release.
+    image: langfuse/langfuse:3.177.1@sha256:2af971c857dac3da0d22e9ba5168150853a266a213d0082fed0e476f2905aabe
     restart: always
     profiles: ["langfuse"]
     depends_on: *langfuse-depends-on

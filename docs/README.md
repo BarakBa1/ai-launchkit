@@ -15,6 +15,7 @@ procedures.
 | [../cloudflare-instructions.md](../cloudflare-instructions.md) | Cloudflare Tunnel design and safety |
 | [../vexa-troubleshooting-workarounds.md](../vexa-troubleshooting-workarounds.md) | Vexa lifecycle and troubleshooting |
 | [N8N-MCP authentication](n8n-mcp-auth.md) | Public API JWT and inbound MCP token contract |
+| [langfuse-redis.md](langfuse-redis.md) | Langfuse Redis connection and rollback contract |
 
 ## Authoritative implementation sources
 

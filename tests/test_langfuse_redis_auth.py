@@ -98,6 +98,7 @@ def docker_rehearsal_compose():
 
           langfuse-worker:
             image: langfuse/langfuse-worker:3.177.1@sha256:a578e58e241e3a1507214c6628d272ce806134840345373048039a088b661356
+            working_dir: /app/worker
             environment: &langfuse-env
               DATABASE_URL: postgresql://postgres:rehearsal-postgres-password@postgres:5432/langfuse
               SALT: rehearsal-salt
@@ -161,6 +162,8 @@ def docker_rehearsal_compose():
               LANGFUSE_INIT_ORG_NAME: Rehearsal
               LANGFUSE_INIT_PROJECT_ID: project_id
               LANGFUSE_INIT_PROJECT_NAME: Rehearsal
+              LANGFUSE_INIT_PROJECT_PUBLIC_KEY: pk-lf-redis-auth-rehearsal
+              LANGFUSE_INIT_PROJECT_SECRET_KEY: sk-lf-redis-auth-rehearsal
               AUTH_DISABLE_SIGNUP: "true"
             depends_on:
               postgres:
@@ -191,6 +194,8 @@ def docker_rehearsal_compose():
               - ./probe.js:/probe.js:ro
             environment:
               REDIS_CONNECTION_STRING: redis://redis:6379
+              LANGFUSE_PUBLIC_KEY: pk-lf-redis-auth-rehearsal
+              LANGFUSE_SECRET_KEY: sk-lf-redis-auth-rehearsal
             depends_on:
               redis:
                 condition: service_healthy
@@ -206,6 +211,7 @@ def docker_rehearsal_probe():
     return textwrap.dedent(
         """
         const http = require('http');
+        const { randomUUID } = require('crypto');
         const Redis = require('ioredis');
         const { Queue, QueueEvents, Worker } = require('bullmq');
 
@@ -231,9 +237,92 @@ def docker_rehearsal_probe():
           });
         }
 
+        function langfuseRequest(method, path, body) {
+          return new Promise((resolve, reject) => {
+            const payload = body === undefined ? '' : JSON.stringify(body);
+            const credentials = Buffer.from(
+              `${process.env.LANGFUSE_PUBLIC_KEY}:${process.env.LANGFUSE_SECRET_KEY}`,
+            ).toString('base64');
+            const request = http.request(
+              {
+                hostname: 'langfuse-web',
+                port: 3000,
+                path,
+                method,
+                headers: {
+                  Authorization: `Basic ${credentials}`,
+                  ...(body === undefined
+                    ? {}
+                    : {
+                        'Content-Type': 'application/json',
+                        'Content-Length': Buffer.byteLength(payload),
+                      }),
+                },
+              },
+              response => {
+                let responseBody = '';
+                response.setEncoding('utf8');
+                response.on('data', chunk => {
+                  responseBody += chunk;
+                });
+                response.on('end', () => {
+                  let parsed;
+                  try {
+                    parsed = responseBody ? JSON.parse(responseBody) : {};
+                  } catch (error) {
+                    reject(new Error(`Langfuse API returned non-JSON status ${response.statusCode}`));
+                    return;
+                  }
+                  resolve({ statusCode: response.statusCode, body: parsed });
+                });
+              },
+            );
+            request.on('error', reject);
+            request.setTimeout(10000, () => request.destroy(new Error('Langfuse API timeout')));
+            if (payload) request.write(payload);
+            request.end();
+          });
+        }
+
+        async function tracePersistenceCheck() {
+          const traceId = randomUUID();
+          const ingestion = await langfuseRequest('POST', '/api/public/ingestion', {
+            batch: [
+              {
+                id: randomUUID(),
+                type: 'trace-create',
+                timestamp: new Date().toISOString(),
+                body: {
+                  id: traceId,
+                  name: 'redis-auth-rehearsal',
+                  input: { rehearsal: true },
+                },
+              },
+            ],
+          });
+          if (![200, 201, 207].includes(ingestion.statusCode)) {
+            throw new Error(`Langfuse ingestion returned ${ingestion.statusCode}`);
+          }
+
+          const deadline = Date.now() + 30000;
+          while (Date.now() < deadline) {
+            const readback = await langfuseRequest(
+              'GET',
+              `/api/public/traces/${traceId}`,
+            );
+            if (readback.statusCode === 200 && readback.body.id === traceId) {
+              console.log('TRACE_PERSISTENCE_OK');
+              return;
+            }
+            await new Promise(resolve => setTimeout(resolve, 1000));
+          }
+          throw new Error('Langfuse trace was not readable after ingestion');
+        }
+
         async function main() {
           await Promise.all([redis.ping(), events.waitUntilReady(), worker.waitUntilReady(), healthCheck()]);
           console.log('LANGFUSE_HEALTH_OK');
+          await tracePersistenceCheck();
           const job = await queue.add('ping', { rehearsal: true });
           const result = await job.waitUntilFinished(events, 15000);
           if (!result || result.ok !== true) throw new Error('queue job result was not successful');
@@ -259,6 +348,122 @@ def docker_rehearsal_probe():
 
 
 class LangfuseRedisAuthTest(unittest.TestCase):
+    def test_langfuse_images_are_immutable_3_177_1_pins(self):
+        compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        langfuse_block = compose[
+            compose.index("  langfuse-worker:") : compose.index("\n  clickhouse:")
+        ]
+
+        self.assertIn(
+            "image: langfuse/langfuse-worker:3.177.1@sha256:a578e58e241e3a1507214c6628d272ce806134840345373048039a088b661356",
+            langfuse_block,
+        )
+        self.assertIn(
+            "image: langfuse/langfuse:3.177.1@sha256:2af971c857dac3da0d22e9ba5168150853a266a213d0082fed0e476f2905aabe",
+            langfuse_block,
+        )
+
+    def test_langfuse_uses_official_redis_tls_path_names(self):
+        compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        langfuse_block = compose[
+            compose.index("  langfuse-worker:") : compose.index("\n  clickhouse:")
+        ]
+
+        for suffix in ("CA", "CERT", "KEY"):
+            self.assertIn(f"REDIS_TLS_{suffix}_PATH:", langfuse_block)
+            self.assertNotIn(f"REDIS_TLS_{suffix}:", langfuse_block)
+
+    def test_rehearsal_worker_healthcheck_resolves_ioredis_from_worker_directory(self):
+        compose = compose_command()
+        environment = {
+            key: os.environ[key]
+            for key in ("PATH", "SystemRoot", "COMSPEC")
+            if key in os.environ
+        }
+        environment["COMPOSE_DISABLE_ENV_FILE"] = "1"
+
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            compose_file = temporary_path / "docker-compose.rehearsal.yml"
+            compose_file.write_text(docker_rehearsal_compose(), encoding="utf-8")
+            environment["DOCKER_CONFIG"] = str(temporary_path / "docker-config")
+            Path(environment["DOCKER_CONFIG"]).mkdir()
+            result = subprocess.run(
+                compose
+                + ["--file", str(compose_file), "config", "--format", "json"],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(result.stdout + result.stderr)[-6000:],
+        )
+        worker = json.loads(result.stdout)["services"]["langfuse-worker"]
+        self.assertEqual(worker.get("working_dir"), "/app/worker")
+        healthcheck = worker.get("healthcheck", {}).get("test", [])
+        self.assertIn("ioredis", " ".join(str(part) for part in healthcheck))
+
+    def test_external_tls_connection_string_and_paths_are_explicitly_wired(self):
+        environment = {
+            key: os.environ[key]
+            for key in ("PATH", "SystemRoot", "COMSPEC")
+            if key in os.environ
+        }
+        environment.update(
+            {
+                "COMPOSE_DISABLE_ENV_FILE": "1",
+                "COMPOSE_PROFILES": "langfuse",
+                "REDIS_CONNECTION_STRING": "rediss://external.example:6380",
+                "REDIS_TLS_ENABLED": "true",
+                "REDIS_TLS_CA_PATH": "/certs/ca.crt",
+                "REDIS_TLS_CERT_PATH": "/certs/client.crt",
+                "REDIS_TLS_KEY_PATH": "/certs/client.key",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as docker_config:
+            environment["DOCKER_CONFIG"] = docker_config
+            result = subprocess.run(
+                compose_command()
+                + ["--profile", "langfuse", "config", "--format", "json"],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(result.stdout + result.stderr)[-6000:],
+        )
+        config = json.loads(result.stdout)
+        for service_name in ("langfuse-worker", "langfuse-web"):
+            service_environment = config["services"][service_name].get("environment", {})
+            self.assertEqual(
+                service_environment.get("REDIS_CONNECTION_STRING"),
+                "rediss://external.example:6380",
+            )
+            self.assertEqual(service_environment.get("REDIS_TLS_ENABLED"), "true")
+            self.assertEqual(
+                service_environment.get("REDIS_TLS_CA_PATH"), "/certs/ca.crt"
+            )
+            self.assertEqual(
+                service_environment.get("REDIS_TLS_CERT_PATH"), "/certs/client.crt"
+            )
+            self.assertEqual(
+                service_environment.get("REDIS_TLS_KEY_PATH"), "/certs/client.key"
+            )
+            self.assertNotIn("REDIS_AUTH", service_environment)
+            for legacy_name in ("REDIS_TLS_CA", "REDIS_TLS_CERT", "REDIS_TLS_KEY"):
+                self.assertNotIn(legacy_name, service_environment)
+
     def test_compose_selects_authless_connection_string_in_shared_langfuse_env(self):
         compose = (REPOSITORY_ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         langfuse_block = compose[
@@ -381,6 +586,46 @@ class LangfuseRedisAuthTest(unittest.TestCase):
             self.assertEqual(parsed.scheme, "redis")
             self.assertIsNone(parsed.username)
             self.assertIsNone(parsed.password)
+            self.assertNotIn("REDIS_AUTH", service_environment)
+
+    def test_empty_parent_connection_string_does_not_reintroduce_host_auth_path(self):
+        environment = {
+            key: os.environ[key]
+            for key in ("PATH", "SystemRoot", "COMSPEC")
+            if key in os.environ
+        }
+        environment.update(
+            {
+                "COMPOSE_DISABLE_ENV_FILE": "1",
+                "COMPOSE_PROFILES": "langfuse",
+                "REDIS_CONNECTION_STRING": "",
+            }
+        )
+
+        with tempfile.TemporaryDirectory() as docker_config:
+            environment["DOCKER_CONFIG"] = docker_config
+            result = subprocess.run(
+                compose_command()
+                + ["--profile", "langfuse", "config", "--format", "json"],
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            )
+
+        self.assertEqual(
+            result.returncode,
+            0,
+            msg=(result.stdout + result.stderr)[-6000:],
+        )
+        config = json.loads(result.stdout)
+        for service_name in ("langfuse-worker", "langfuse-web"):
+            service_environment = config["services"][service_name].get("environment", {})
+            self.assertEqual(
+                service_environment.get("REDIS_CONNECTION_STRING"),
+                "redis://redis:6379",
+            )
             self.assertNotIn("REDIS_AUTH", service_environment)
 
     def test_rehearsal_compose_file_is_valid(self):
@@ -506,6 +751,7 @@ class LangfuseRedisAuthTest(unittest.TestCase):
                     msg=(first_probe.stdout + first_probe.stderr)[-6000:],
                 )
                 self.assertIn("QUEUE_JOB_OK", first_probe.stdout)
+                self.assertIn("TRACE_PERSISTENCE_OK", first_probe.stdout)
 
                 restarted = run_compose(["restart", "redis"], timeout=60)
                 self.assertEqual(
@@ -539,6 +785,7 @@ class LangfuseRedisAuthTest(unittest.TestCase):
                     msg=(second_probe.stdout + second_probe.stderr)[-6000:],
                 )
                 self.assertIn("QUEUE_JOB_OK", second_probe.stdout)
+                self.assertIn("TRACE_PERSISTENCE_OK", second_probe.stdout)
 
                 monitor = run_compose(
                     ["logs", "--no-color", "--timestamps", "redis-monitor"], timeout=30
