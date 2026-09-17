@@ -98,7 +98,7 @@ def docker_rehearsal_compose():
 
           langfuse-worker:
             image: langfuse/langfuse-worker:3.177.1@sha256:a578e58e241e3a1507214c6628d272ce806134840345373048039a088b661356
-            working_dir: /app/worker
+            working_dir: /app
             environment: &langfuse-env
               DATABASE_URL: postgresql://postgres:rehearsal-postgres-password@postgres:5432/langfuse
               SALT: rehearsal-salt
@@ -146,7 +146,7 @@ def docker_rehearsal_compose():
               test:
                 - CMD-SHELL
                 - >-
-                  node -e "const Redis=require('ioredis'); const r=new Redis(process.env.REDIS_CONNECTION_STRING,{maxRetriesPerRequest:1});
+                  node -e "const Redis=require('/app/worker/node_modules/ioredis'); const r=new Redis(process.env.REDIS_CONNECTION_STRING,{maxRetriesPerRequest:1});
                   r.ping().then(()=>r.quit()).catch(()=>process.exit(1))"
               interval: 5s
               timeout: 10s
@@ -373,7 +373,7 @@ class LangfuseRedisAuthTest(unittest.TestCase):
             self.assertIn(f"REDIS_TLS_{suffix}_PATH:", langfuse_block)
             self.assertNotIn(f"REDIS_TLS_{suffix}:", langfuse_block)
 
-    def test_rehearsal_worker_healthcheck_resolves_ioredis_from_worker_directory(self):
+    def test_rehearsal_worker_preserves_image_workdir_and_healthcheck_module_path(self):
         compose = compose_command()
         environment = {
             key: os.environ[key]
@@ -404,9 +404,13 @@ class LangfuseRedisAuthTest(unittest.TestCase):
             msg=(result.stdout + result.stderr)[-6000:],
         )
         worker = json.loads(result.stdout)["services"]["langfuse-worker"]
-        self.assertEqual(worker.get("working_dir"), "/app/worker")
+        self.assertEqual(worker.get("working_dir"), "/app")
+        self.assertIsNone(worker.get("entrypoint"))
+        self.assertIsNone(worker.get("command"))
         healthcheck = worker.get("healthcheck", {}).get("test", [])
-        self.assertIn("ioredis", " ".join(str(part) for part in healthcheck))
+        healthcheck_text = " ".join(str(part) for part in healthcheck)
+        self.assertIn("/app/worker/node_modules/ioredis", healthcheck_text)
+        self.assertNotIn("require('ioredis')", healthcheck_text)
 
     def test_external_tls_connection_string_and_paths_are_explicitly_wired(self):
         environment = {
