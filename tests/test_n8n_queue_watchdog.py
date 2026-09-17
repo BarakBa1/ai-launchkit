@@ -48,6 +48,28 @@ class N8nQueueWatchdogTests(unittest.TestCase):
                 }
             )
         )
+        for status in (None, "", "success", "running", "new"):
+            with self.subTest(status=status):
+                self.assertFalse(
+                    is_queue_failure(
+                        {
+                            "id": "wrong-status",
+                            "status": status,
+                            "startedAt": None,
+                            "error": {"message": "timeout exceeded when trying to connect"},
+                        }
+                    )
+                )
+        self.assertTrue(
+            is_queue_failure(
+                {
+                    "id": "normalized-error",
+                    "status": " ERROR ",
+                    "startedAt": None,
+                    "error": {"message": "timeout exceeded when trying to connect"},
+                }
+            )
+        )
         self.assertFalse(
             is_queue_failure(
                 {
@@ -509,6 +531,7 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         }
         detail = {
             **metadata,
+            "status": "error",
             "data": {
                 "resultData": {
                     "runData": {},
@@ -581,6 +604,43 @@ class N8nQueueWatchdogTests(unittest.TestCase):
 
         self.assertIn("n8n_watchdog_collection_success 0", metrics)
         self.assertIn("n8n_watchdog_execution_detail_failures_total 1", metrics)
+
+    def test_queue_failure_without_id_marks_collection_incomplete(self):
+        queue_failure = {
+            "status": "error",
+            "startedAt": None,
+            "error": {"message": "timeout exceeded when trying to connect"},
+            "data": {"resultData": {"runData": {}}},
+        }
+
+        class FakeApi:
+            configured = True
+
+            def list_recent_executions(self, **_kwargs):
+                return ExecutionPage([queue_failure], "")
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        collector = WatchdogCollector(
+            WatchdogConfig(
+                n8n_api_url="https://n8n.example/api/v1",
+                n8n_api_key="test-only",
+                scrape_cache_seconds=0,
+            ),
+            api_client=FakeApi(),
+        )
+        collector.redis = FakeRedis()
+
+        metrics = collector.collect(force=True)
+
+        self.assertIn("n8n_watchdog_collection_success 0", metrics)
+        self.assertIn("n8n_watchdog_execution_detail_failures_total 1", metrics)
+        self.assertIn(
+            'n8n_queue_failure_events_total{workflow_id="none",workflow_name="none"} 0',
+            metrics,
+        )
 
     def test_started_error_without_inline_error_is_confirmed_with_detail_read(self):
         now = time()

@@ -197,11 +197,14 @@ def _result_error(execution: Mapping[str, Any]) -> Any:
     return _as_mapping(_execution_data(execution).get("resultData")).get("error")
 
 
+def _execution_id(execution: Mapping[str, Any]) -> str:
+    value = execution.get("id")
+    return "" if value is None else str(value).strip()
+
+
 def has_queue_failure_signature(execution: Mapping[str, Any]) -> bool:
-    status = str(execution.get("status", "")).lower()
-    if status and status != "error":
-        return False
-    if not status and not execution.get("error") and not _result_error(execution):
+    status = str(execution.get("status", "")).strip().lower()
+    if status != "error":
         return False
     return bool(QUEUE_FAILURE_RE.search(execution_error_text(execution)))
 
@@ -757,6 +760,10 @@ class WatchdogCollector:
             page_rows = page.rows
         for row in page_rows:
             if is_queue_failure(row):
+                if not _execution_id(row):
+                    self.execution_detail_failures_last_cycle += 1
+                    self.execution_detail_failures_total += 1
+                    continue
                 rows.append(row)
                 continue
             # Public API v1 metadata omits execution.data and may omit the
@@ -773,7 +780,7 @@ class WatchdogCollector:
                 and bool(execution_error_text(row))
             ):
                 continue
-            execution_id = str(row.get("id") or "")
+            execution_id = _execution_id(row)
             if not execution_id:
                 self.execution_detail_failures_last_cycle += 1
                 self.execution_detail_failures_total += 1
@@ -788,6 +795,10 @@ class WatchdogCollector:
             expanded = dict(row)
             expanded.update(detail)
             if is_queue_failure(expanded):
+                if not _execution_id(expanded):
+                    self.execution_detail_failures_last_cycle += 1
+                    self.execution_detail_failures_total += 1
+                    continue
                 rows.append(expanded)
         complete = not page.next_last_id and self.execution_detail_failures_last_cycle == 0
         return True, rows, complete
@@ -880,8 +891,11 @@ class WatchdogCollector:
                     and len(known_workflows) >= self.config.max_workflow_labels
                 ):
                     continue
-                execution_id = str(execution.get("id") or "")
+                execution_id = _execution_id(execution)
                 if not execution_id:
+                    self.execution_coverage_complete = False
+                    self.execution_detail_failures_last_cycle += 1
+                    self.execution_detail_failures_total += 1
                     continue
                 source_time = _timestamp(execution.get("stoppedAt") or execution.get("createdAt"), now)
                 state = self.failures.get(execution_id)
