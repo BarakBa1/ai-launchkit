@@ -103,6 +103,7 @@ For example, create the protected placeholder and then populate it through the
 operator's secret-management process:
 
 ```bash
+sudo install -d -o root -g root -m 0750 /etc/ai-launchkit
 sudo install -o root -g 65534 -m 0640 /dev/null /etc/ai-launchkit/alertmanager-slack-webhook
 sudoedit /etc/ai-launchkit/alertmanager-slack-webhook
 ```
