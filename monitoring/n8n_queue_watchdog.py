@@ -219,6 +219,41 @@ def is_queue_failure(execution: Mapping[str, Any]) -> bool:
     return started_at in (None, "") or node_count == 0
 
 
+def _contains_mapping_key(value: Any, key: str) -> bool:
+    if isinstance(value, Mapping):
+        if key in value:
+            return True
+        return any(_contains_mapping_key(child, key) for child in value.values())
+    if isinstance(value, (list, tuple)):
+        return any(_contains_mapping_key(child, key) for child in value)
+    return False
+
+
+def _detail_has_classification_evidence(
+    source: Mapping[str, Any], detail: Any, expanded: Mapping[str, Any]
+) -> bool:
+    """Require materialized detail before treating an ambiguous error as safe to skip."""
+
+    if not isinstance(detail, Mapping) or not detail:
+        return False
+    if _contains_mapping_key(detail, "dataTooLargeToDisplay"):
+        return False
+    if detail.get("data") == "dataTooLargeToDisplay":
+        return False
+
+    # A summary or a valid resultData.runData mapping proves the node boundary,
+    # including an explicitly empty runData mapping for a zero-node execution.
+    if executed_node_count(detail) is not None:
+        return True
+
+    # Some n8n error records omit data while retaining the top-level error. It
+    # is sufficient only when the source/detail pair independently proves the
+    # zero-node boundary through a missing startedAt and the known Bull error.
+    merged = dict(source)
+    merged.update(detail)
+    return bool(execution_error_text(detail)) and is_queue_failure(merged)
+
+
 def _contains_reference(value: Any, reference: str) -> bool:
     if isinstance(value, Mapping):
         return any(_contains_reference(child, reference) for child in value.values())
@@ -459,7 +494,9 @@ class N8nApiClient:
 
     def get_execution(self, execution_id: str) -> Mapping[str, Any]:
         payload = self._get("executions/" + quote(str(execution_id), safe=""), {"includeData": "true"})
-        return payload if isinstance(payload, Mapping) else {}
+        if not isinstance(payload, Mapping):
+            raise ValueError("n8n execution detail response was not an object")
+        return payload
 
     def probe(self) -> bool:
         try:
@@ -792,8 +829,16 @@ class WatchdogCollector:
                 self.execution_detail_failures_last_cycle += 1
                 self.execution_detail_failures_total += 1
                 continue
+            if not isinstance(detail, Mapping):
+                self.execution_detail_failures_last_cycle += 1
+                self.execution_detail_failures_total += 1
+                continue
             expanded = dict(row)
             expanded.update(detail)
+            if not _detail_has_classification_evidence(row, detail, expanded):
+                self.execution_detail_failures_last_cycle += 1
+                self.execution_detail_failures_total += 1
+                continue
             if is_queue_failure(expanded):
                 if not _execution_id(expanded):
                     self.execution_detail_failures_last_cycle += 1

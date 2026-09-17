@@ -38,7 +38,11 @@ metadata cannot prove that an error row is not a zero-node queue failure and
 for configured notification correlation. On n8n 1.123.27, continuation uses
 the last execution ID (`lastId`) from the page boundary; the response's
 `nextCursor` is only a server-side indication that another `lastId` request is
-needed.
+needed. A successful detail response must still materialize a node summary,
+runData, or enough error evidence to classify the row. Empty, non-object, or
+dataTooLargeToDisplay detail responses are retained as incomplete coverage
+and make collection unhealthy; they are never treated as an ordinary
+non-queue error.
 
 Health URLs and Redis/PostgreSQL hosts are optional. An unset probe is exposed
 as `configured=0` and is excluded from the dependency alert rule. Configure

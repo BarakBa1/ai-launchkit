@@ -420,6 +420,28 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         client.get_execution("921111")
         self.assertIn("includeData=true", opener.requests[-1][0].full_url)
 
+    def test_api_detail_rejects_a_non_mapping_payload(self):
+        class FakeResponse:
+            status = 200
+            headers = {}
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *_args):
+                return False
+
+            def read(self, _size=-1):
+                return b"[]"
+
+        class FakeOpener:
+            def open(self, _request, timeout):
+                return FakeResponse()
+
+        client = N8nApiClient("https://n8n.example/api/v1", "secret", 1, opener=FakeOpener())
+        with self.assertRaises(ValueError):
+            client.get_execution("921111")
+
     def test_api_paginates_to_time_boundary_and_marks_page_cap_unknown(self):
         now = time()
 
@@ -693,6 +715,65 @@ class N8nQueueWatchdogTests(unittest.TestCase):
 
         self.assertIn('n8n_queue_failure_events_total{workflow_id="main-id",workflow_name="main"} 1', metrics)
         self.assertEqual(collector.api.detail_ids, ["921041"])
+
+    def test_ambiguous_error_detail_without_materialized_evidence_is_incomplete(self):
+        now = time()
+        metadata = {
+            "id": "921041",
+            "workflowId": "main-id",
+            "workflowName": "main",
+            "status": "error",
+            "startedAt": now - 120,
+            "stoppedAt": now - 120,
+        }
+        details = {
+            "dataTooLargeToDisplay": {
+                **metadata,
+                "dataTooLargeToDisplay": True,
+            },
+            "empty_mapping": {},
+            "non_mapping": [],
+            "missing_run_data_and_error": {
+                **metadata,
+                "data": {"resultData": {}},
+            },
+        }
+
+        class FakeApi:
+            configured = True
+
+            def list_recent_executions(self, **_kwargs):
+                return ExecutionPage([metadata], "")
+
+            def get_execution(self, _execution_id):
+                return details[self.shape]
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        for shape in details:
+            with self.subTest(shape=shape):
+                api = FakeApi()
+                api.shape = shape
+                collector = WatchdogCollector(
+                    WatchdogConfig(
+                        n8n_api_url="https://n8n.example/api/v1",
+                        n8n_api_key="test-only",
+                        scrape_cache_seconds=0,
+                    ),
+                    api_client=api,
+                )
+                collector.redis = FakeRedis()
+
+                metrics = collector.collect(force=True)
+
+                self.assertIn("n8n_watchdog_collection_success 0", metrics)
+                self.assertIn("n8n_watchdog_execution_detail_failures_total 1", metrics)
+                self.assertIn(
+                    'n8n_queue_failure_events_total{workflow_id="none",workflow_name="none"} 0',
+                    metrics,
+                )
 
     def test_prometheus_target_has_an_atomic_compose_watchdog_service(self):
         compose = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
