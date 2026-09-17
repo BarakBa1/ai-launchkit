@@ -10,6 +10,7 @@ procedures.
 | [../README.md](../README.md) | Operator overview and source-of-truth boundaries |
 | [../AGENTS.md](../AGENTS.md) | Agent and change rules |
 | [../ADDING_NEW_SERVICE.md](../ADDING_NEW_SERVICE.md) | Add or integrate a service |
+| [../monitoring/README.md](../monitoring/README.md) | External n8n queue watchdog and alerting |
 | [CALCOM_SETUP.md](CALCOM_SETUP.md) | Cal.com setup and calendar integration |
 | [../cloudflare-instructions.md](../cloudflare-instructions.md) | Cloudflare Tunnel design and safety |
 | [../vexa-troubleshooting-workarounds.md](../vexa-troubleshooting-workarounds.md) | Vexa lifecycle and troubleshooting |

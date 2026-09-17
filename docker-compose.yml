@@ -329,6 +329,49 @@ services:
     extra_hosts:
       - host.docker.internal:host-gateway
 
+  n8n-queue-watchdog:
+    image: python:3.12-alpine
+    container_name: n8n-queue-watchdog
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    command: ["python", "/app/monitoring/n8n_queue_watchdog.py", "--host", "0.0.0.0", "--port", "9105"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      N8N_WATCHDOG_API_URL: ${N8N_WATCHDOG_API_URL:-}
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      N8N_WATCHDOG_WORKFLOW_IDS: ${N8N_WATCHDOG_WORKFLOW_IDS:-}
+      N8N_WATCHDOG_MAX_WORKFLOW_LABELS: ${N8N_WATCHDOG_MAX_WORKFLOW_LABELS:-50}
+      N8N_WATCHDOG_MAX_RESPONSE_BYTES: ${N8N_WATCHDOG_MAX_RESPONSE_BYTES:-5000000}
+      N8N_WATCHDOG_MAX_PAGES: ${N8N_WATCHDOG_MAX_PAGES:-10}
+      N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS: ${N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS:-3600}
+      N8N_WATCHDOG_ERROR_WORKFLOW_ID: ${N8N_WATCHDOG_ERROR_WORKFLOW_ID:-}
+      N8N_WATCHDOG_SLACK_WORKFLOW_ID: ${N8N_WATCHDOG_SLACK_WORKFLOW_ID:-}
+      N8N_WATCHDOG_NOTIFICATION_GRACE_SECONDS: ${N8N_WATCHDOG_NOTIFICATION_GRACE_SECONDS:-60}
+      N8N_WATCHDOG_FAILURE_RETENTION_SECONDS: ${N8N_WATCHDOG_FAILURE_RETENTION_SECONDS:-3600}
+      N8N_WATCHDOG_EXECUTION_LIMIT: ${N8N_WATCHDOG_EXECUTION_LIMIT:-100}
+      N8N_WATCHDOG_N8N_HEALTH_URL: ${N8N_WATCHDOG_N8N_HEALTH_URL:-http://n8n:5678/healthz}
+      N8N_WATCHDOG_WORKER_HEALTH_URL: ${N8N_WATCHDOG_WORKER_HEALTH_URL:-}
+      N8N_WATCHDOG_REDIS_HOST: ${N8N_WATCHDOG_REDIS_HOST:-redis}
+      N8N_WATCHDOG_REDIS_PORT: ${N8N_WATCHDOG_REDIS_PORT:-6379}
+      N8N_WATCHDOG_REDIS_USERNAME: ${N8N_WATCHDOG_REDIS_USERNAME:-}
+      N8N_WATCHDOG_REDIS_PASSWORD: ${N8N_WATCHDOG_REDIS_PASSWORD:-}
+      N8N_WATCHDOG_REDIS_SCAN_COUNT: ${N8N_WATCHDOG_REDIS_SCAN_COUNT:-100}
+      N8N_WATCHDOG_REDIS_MAX_KEYS: ${N8N_WATCHDOG_REDIS_MAX_KEYS:-500}
+      N8N_WATCHDOG_POSTGRES_HOST: ${N8N_WATCHDOG_POSTGRES_HOST:-postgres}
+      N8N_WATCHDOG_POSTGRES_PORT: ${N8N_WATCHDOG_POSTGRES_PORT:-5432}
+      N8N_WATCHDOG_PROBE_TIMEOUT_SECONDS: ${N8N_WATCHDOG_PROBE_TIMEOUT_SECONDS:-2}
+      N8N_WATCHDOG_SCRAPE_CACHE_SECONDS: ${N8N_WATCHDOG_SCRAPE_CACHE_SECONDS:-10}
+    volumes:
+      - ./monitoring:/app/monitoring:ro
+    expose:
+      - "9105"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9105/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   qdrant:
     image: qdrant/qdrant
     container_name: qdrant
@@ -925,6 +968,9 @@ services:
       - prometheus_data:/prometheus
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      n8n-queue-watchdog:
+        condition: service_started
 
   node-exporter:
     image: prom/node-exporter:latest

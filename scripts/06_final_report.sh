@@ -151,6 +151,10 @@ if is_profile_active "monitoring"; then
   echo "Host: ${PROMETHEUS_HOSTNAME:-<hostname_not_set>}"
   echo "User: ${PROMETHEUS_USERNAME:-<not_set_in_env>}"
   echo "Password: ${PROMETHEUS_PASSWORD:-<not_set_in_env>}"
+  echo
+  echo "n8n Queue Watchdog: internal service n8n-queue-watchdog:9105"
+  echo "API URL: set in N8N_WATCHDOG_API_URL (value omitted)"
+  echo "Metrics: scraped by the Prometheus monitoring profile"
 fi
 
 if is_profile_active "searxng"; then

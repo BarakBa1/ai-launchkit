@@ -15,7 +15,7 @@ scrape_configs:
 
   - job_name: "n8n-queue-watchdog"
     static_configs:
-      - targets: ["host.docker.internal:9105"]
+      - targets: ["n8n-queue-watchdog:9105"]
 
   - job_name: "node-exporter"
     static_configs:

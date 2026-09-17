@@ -21,6 +21,36 @@ groups:
           summary: n8n queue watchdog is stale
           description: The independent n8n queue watchdog has not completed a collection cycle for more than two minutes.
 
+      - alert: N8nQueueWatchdogCollectionUnhealthy
+        expr: n8n_watchdog_collection_success == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog cannot establish complete execution coverage
+          description: The watchdog API is missing, unreachable, insecurely configured, or returned incomplete execution coverage.
+
+      - alert: N8nQueueWatchdogExecutionDetailFailure
+        expr: increase(n8n_watchdog_execution_detail_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog could not classify execution details
+          description: One or more candidate executions could not be read with the bounded detail request.
+
+      - alert: N8nQueueWatchdogNotificationCorrelationDown
+        expr: n8n_watchdog_notification_correlation_attempted == 1 and n8n_watchdog_notification_correlation_up == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue notification correlation is incomplete
+          description: The configured error or Slack workflow listing failed or did not reach its time boundary; unnotified failures remain alertable.
+
       - alert: N8nQueueFailureUnnotified
         expr: n8n_queue_failure_unnotified > 0
         for: 1m

@@ -63,7 +63,7 @@ base_services_data=(
     "searxng" "SearXNG (Private Metasearch Engine)"
     "miniflux" "Miniflux (Minimalist and opinionated feed reader)"
     "langfuse" "Langfuse Suite (AI Observability - includes Clickhouse, Minio)"
-    "monitoring" "Monitoring Suite (Prometheus, Grafana, cAdvisor, Node-Exporter)"
+    "monitoring" "Monitoring Suite (Prometheus, Grafana, Queue Watchdog, cAdvisor, Node-Exporter)"
     "cloudflare-tunnel" "Cloudflare Tunnel (Zero-Trust Secure Access)"
     "flowise" "Flowise (AI Agent Builder)"
     "n8n-mcp" "n8n-MCP (AI workflow generation for Claude/Cursor)"

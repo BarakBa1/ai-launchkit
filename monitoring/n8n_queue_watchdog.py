@@ -22,13 +22,13 @@ from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Dict, Iterable, List, Mapping, Optional, Sequence, Tuple
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urljoin
-from urllib.request import Request, urlopen
+from urllib.parse import quote, urlencode, urljoin, urlsplit
+from urllib.request import HTTPRedirectHandler, Request, build_opener, urlopen
 
 
 LOGGER = logging.getLogger("n8n_queue_watchdog")
 QUEUE_FAILURE_RE = re.compile(
-    r"(?:timeout\s+exceeded\s+when\s+trying\s+to\s+connect|\bqueue\.onfailed\b|\bbull\b)",
+    r"(?:timeout\s+exceeded\s+when\s+trying\s+to\s+connect|\bqueue\.onfailed\b|\bbull@\d+(?:\.\d+){1,2}\b)",
     re.IGNORECASE,
 )
 QUEUE_KEY_RE = re.compile(r"^bull:(?P<queue>.+):(?P<state>wait|active|failed|delayed|stalled)$")
@@ -62,6 +62,9 @@ class WatchdogConfig:
     execution_limit: int = 100
     workflow_ids: frozenset[str] = frozenset()
     max_workflow_labels: int = 50
+    max_response_bytes: int = 5_000_000
+    max_pages: int = 10
+    source_lookback_seconds: float = 3600.0
     error_workflow_id: str = ""
     slack_workflow_id: str = ""
     notification_grace_seconds: float = 60.0
@@ -84,10 +87,17 @@ class WatchdogConfig:
         return cls(
             n8n_api_url=os.getenv("N8N_WATCHDOG_API_URL", "").rstrip("/"),
             n8n_api_key=os.getenv("N8N_API_KEY", ""),
-            execution_limit=_bounded_int(os.getenv("N8N_WATCHDOG_EXECUTION_LIMIT", "100"), 100, 1, 500),
+            execution_limit=_bounded_int(os.getenv("N8N_WATCHDOG_EXECUTION_LIMIT", "100"), 100, 1, 250),
             workflow_ids=_csv_set(os.getenv("N8N_WATCHDOG_WORKFLOW_IDS", "")),
             max_workflow_labels=_bounded_int(
                 os.getenv("N8N_WATCHDOG_MAX_WORKFLOW_LABELS", "50"), 50, 1, 500
+            ),
+            max_response_bytes=_bounded_int(
+                os.getenv("N8N_WATCHDOG_MAX_RESPONSE_BYTES", "5000000"), 5_000_000, 100_000, 50_000_000
+            ),
+            max_pages=_bounded_int(os.getenv("N8N_WATCHDOG_MAX_PAGES", "10"), 10, 1, 100),
+            source_lookback_seconds=_bounded_float(
+                os.getenv("N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS", "3600"), 3600.0, 60.0, 86400.0
             ),
             error_workflow_id=os.getenv("N8N_WATCHDOG_ERROR_WORKFLOW_ID", "").strip(),
             slack_workflow_id=os.getenv("N8N_WATCHDOG_SLACK_WORKFLOW_ID", "").strip(),
@@ -168,19 +178,33 @@ def execution_error_text(execution: Mapping[str, Any]) -> str:
     for key in ("message", "stack"):
         if execution.get(key):
             pieces.append(str(execution[key]))
-    data_error = _as_mapping(_as_mapping(_execution_data(execution).get("resultData")).get("error"))
-    for key in ("message", "stack", "name"):
-        if data_error.get(key):
-            pieces.append(str(data_error[key]))
+    data_error = _as_mapping(_execution_data(execution).get("resultData")).get("error")
+    if isinstance(data_error, Mapping):
+        for key in ("message", "stack", "name"):
+            if data_error.get(key):
+                pieces.append(str(data_error[key]))
+    elif data_error:
+        pieces.append(str(data_error))
     return " ".join(pieces)
+
+
+def _result_error(execution: Mapping[str, Any]) -> Any:
+    return _as_mapping(_execution_data(execution).get("resultData")).get("error")
+
+
+def has_queue_failure_signature(execution: Mapping[str, Any]) -> bool:
+    status = str(execution.get("status", "")).lower()
+    if status and status != "error":
+        return False
+    if not status and not execution.get("error") and not _result_error(execution):
+        return False
+    return bool(QUEUE_FAILURE_RE.search(execution_error_text(execution)))
 
 
 def is_queue_failure(execution: Mapping[str, Any]) -> bool:
     """Identify a zero-node Bull queue failure without guessing on other errors."""
 
-    if str(execution.get("status", "")).lower() != "error":
-        return False
-    if not QUEUE_FAILURE_RE.search(execution_error_text(execution)):
+    if not has_queue_failure_signature(execution):
         return False
     started_at = execution.get("startedAt")
     node_count = executed_node_count(execution)
@@ -202,7 +226,12 @@ def handler_references_execution(handler_execution: Mapping[str, Any], execution
 
 
 def _successful(execution: Mapping[str, Any]) -> bool:
-    return str(execution.get("status", "")).lower() == "success" and execution.get("finished", True) is not False
+    status = str(execution.get("status", "")).lower()
+    if status:
+        return status == "success" and execution.get("finished", True) is not False
+    if execution.get("finished") is not True:
+        return False
+    return not execution.get("error") and not _result_error(execution)
 
 
 def _workflow_id(execution: Mapping[str, Any]) -> str:
@@ -249,15 +278,85 @@ def _metric_block(name: str, metric_type: str, help_text: str, samples: Iterable
     return [f"# HELP {name} {help_text}", f"# TYPE {name} {metric_type}", *samples]
 
 
+class ResponseTooLarge(ValueError):
+    """Raised before an unbounded remote response can enter process memory."""
+
+
+def _read_limited(response: Any, max_bytes: int) -> bytes:
+    content_length = response.headers.get("Content-Length") if hasattr(response, "headers") else None
+    if content_length:
+        try:
+            parsed_length = int(content_length)
+        except (TypeError, ValueError):
+            parsed_length = None
+        if parsed_length is not None and parsed_length > max_bytes:
+            raise ResponseTooLarge("remote response exceeds configured byte limit")
+    body = response.read(max_bytes + 1)
+    if len(body) > max_bytes:
+        raise ResponseTooLarge("remote response exceeds configured byte limit")
+    return body
+
+
+def _url_origin(url: str) -> Tuple[str, str, int]:
+    try:
+        parsed = urlsplit(url)
+        default_port = 443 if parsed.scheme.lower() == "https" else 80
+        return parsed.scheme.lower(), (parsed.hostname or "").lower(), parsed.port or default_port
+    except ValueError as exc:
+        raise URLError("invalid n8n API redirect URL") from exc
+
+
+class _SameOriginRedirectHandler(HTTPRedirectHandler):
+    def redirect_request(
+        self,
+        req: Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Mapping[str, Any],
+        newurl: str,
+    ) -> Request:
+        target = urljoin(req.full_url, newurl)
+        if urlsplit(target).scheme.lower() != "https" or _url_origin(req.full_url) != _url_origin(target):
+            raise URLError("refusing cross-origin or non-HTTPS n8n API redirect")
+        redirected = super().redirect_request(req, fp, code, msg, headers, target)
+        if redirected is None:
+            raise URLError("n8n API redirect was not converted to a request")
+        return redirected
+
+
+def _secure_api_url(url: str) -> bool:
+    try:
+        parsed = urlsplit(url)
+    except ValueError:
+        return False
+    return parsed.scheme.lower() == "https" and bool(parsed.hostname) and not parsed.username and not parsed.password
+
+
+@dataclass(frozen=True)
+class ExecutionPage:
+    rows: List[Mapping[str, Any]]
+    next_cursor: str = ""
+
+
 class N8nApiClient:
-    def __init__(self, base_url: str, api_key: str, timeout_seconds: float) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        api_key: str,
+        timeout_seconds: float,
+        opener: Any = None,
+        max_response_bytes: int = 5_000_000,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.api_key = api_key
         self.timeout_seconds = timeout_seconds
+        self.opener = opener or build_opener(_SameOriginRedirectHandler())
+        self.max_response_bytes = max_response_bytes
 
     @property
     def configured(self) -> bool:
-        return bool(self.base_url and self.api_key)
+        return bool(self.base_url and self.api_key and _secure_api_url(self.base_url))
 
     def _get(self, resource: str, params: Mapping[str, Any]) -> Any:
         if not self.configured:
@@ -267,21 +366,83 @@ class N8nApiClient:
         if query:
             url += "?" + query
         request = Request(url, headers={"X-N8N-API-KEY": self.api_key, "Accept": "application/json"})
-        with urlopen(request, timeout=self.timeout_seconds) as response:
-            return json.loads(response.read().decode("utf-8"))
+        with self.opener.open(request, timeout=self.timeout_seconds) as response:
+            return json.loads(_read_limited(response, self.max_response_bytes).decode("utf-8"))
 
-    def list_executions(self, workflow_id: str = "", limit: int = 100) -> List[Mapping[str, Any]]:
-        params: Dict[str, Any] = {"limit": limit, "includeData": "true"}
+    def list_execution_page(
+        self,
+        workflow_id: str = "",
+        limit: int = 100,
+        include_data: bool = False,
+        cursor: str = "",
+        status: str = "",
+    ) -> ExecutionPage:
+        limit = max(1, min(250, int(limit)))
+        params: Dict[str, Any] = {"limit": limit, "includeData": "true" if include_data else "false"}
         if workflow_id:
             params["workflowId"] = workflow_id
+        if cursor:
+            params["cursor"] = cursor
+        if status:
+            params["status"] = status
         payload = self._get("executions", params)
-        rows = payload if isinstance(payload, list) else _as_mapping(payload).get("data", [])
-        return [row for row in rows if isinstance(row, Mapping)]
+        if isinstance(payload, list):
+            rows = payload
+        else:
+            rows = _as_mapping(payload).get("data")
+            if not isinstance(rows, list):
+                raise ValueError("n8n execution response did not contain a data list")
+        next_cursor = "" if isinstance(payload, list) else str(_as_mapping(payload).get("nextCursor") or "")
+        return ExecutionPage([row for row in rows if isinstance(row, Mapping)], next_cursor)
+
+    def list_recent_executions(
+        self,
+        workflow_id: str = "",
+        limit: int = 100,
+        include_data: bool = False,
+        max_pages: int = 10,
+        since: Optional[float] = None,
+        status: str = "",
+    ) -> ExecutionPage:
+        rows: List[Mapping[str, Any]] = []
+        cursor = ""
+        complete = True
+        for _page_number in range(max_pages):
+            page = self.list_execution_page(workflow_id, limit, include_data, cursor, status)
+            rows.extend(page.rows)
+            if since is not None and page.rows:
+                oldest = min(
+                    _timestamp(row.get("stoppedAt") or row.get("startedAt") or row.get("createdAt"), time.time())
+                    for row in page.rows
+                )
+                if oldest < since:
+                    break
+            if not page.next_cursor:
+                if len(page.rows) >= limit:
+                    complete = False
+                break
+            cursor = page.next_cursor
+        else:
+            complete = False
+        return ExecutionPage(rows, "" if complete else "unknown")
+
+    def list_executions(
+        self,
+        workflow_id: str = "",
+        limit: int = 100,
+        include_data: bool = False,
+        status: str = "",
+    ) -> List[Mapping[str, Any]]:
+        return self.list_execution_page(workflow_id, limit, include_data, status=status).rows
+
+    def get_execution(self, execution_id: str) -> Mapping[str, Any]:
+        payload = self._get("executions/" + quote(str(execution_id), safe=""), {"includeData": "true"})
+        return payload if isinstance(payload, Mapping) else {}
 
     def probe(self) -> bool:
         try:
-            self.list_executions(limit=1)
-        except (HTTPError, URLError, OSError, RuntimeError, ValueError, json.JSONDecodeError):
+            self.list_executions(limit=1, include_data=False)
+        except Exception:  # noqa: BLE001 - a probe must fail closed for every client-side read error
             return False
         return True
 
@@ -432,58 +593,157 @@ class FailureState:
     notified: Optional[bool] = None
 
 
+@dataclass(frozen=True)
+class NotificationRows:
+    handler: List[Mapping[str, Any]]
+    slack: List[Mapping[str, Any]]
+    complete: bool
+
+
 class WatchdogCollector:
     def __init__(self, config: WatchdogConfig, api_client: Optional[N8nApiClient] = None) -> None:
         self.config = config
-        self.api = api_client or N8nApiClient(config.n8n_api_url, config.n8n_api_key, config.probe_timeout_seconds)
+        self.api = api_client or N8nApiClient(
+            config.n8n_api_url,
+            config.n8n_api_key,
+            config.probe_timeout_seconds,
+            max_response_bytes=config.max_response_bytes,
+        )
+        if api_client is not None and hasattr(self.api, "max_response_bytes"):
+            self.api.max_response_bytes = config.max_response_bytes
         self.redis = RedisProbe(config)
         self.failures: "OrderedDict[str, FailureState]" = OrderedDict()
         self.failure_totals: Dict[Tuple[str, str], int] = defaultdict(int)
+        self.execution_detail_failures_total = 0
+        self.execution_detail_failures_last_cycle = 0
+        self.execution_coverage_complete = False
+        self.notification_correlation_attempted = False
+        self.notification_correlation_up = False
+        self.notification_correlation_failures_total = 0
         self.last_body = ""
         self.last_collection = 0.0
         self.lock = threading.Lock()
 
-    def _source_executions(self) -> Tuple[bool, List[Mapping[str, Any]]]:
+    def _list_recent_executions(
+        self,
+        workflow_id: str = "",
+        include_data: bool = False,
+        since: Optional[float] = None,
+        status: str = "",
+    ) -> ExecutionPage:
+        list_recent = getattr(self.api, "list_recent_executions", None)
+        if callable(list_recent):
+            return list_recent(
+                workflow_id=workflow_id,
+                limit=self.config.execution_limit,
+                include_data=include_data,
+                max_pages=self.config.max_pages,
+                since=since,
+                status=status,
+            )
+        rows = self.api.list_executions(
+            workflow_id,
+            self.config.execution_limit,
+            include_data=include_data,
+            status=status,
+        )
+        return ExecutionPage(rows, "")
+
+    def _source_executions(self, now: float) -> Tuple[bool, List[Mapping[str, Any]], bool]:
+        self.execution_detail_failures_last_cycle = 0
         if not self.api.configured:
-            return False, []
+            return False, [], False
         try:
-            rows = self.api.list_executions(limit=self.config.execution_limit)
-        except (HTTPError, URLError, OSError, RuntimeError, ValueError, json.JSONDecodeError):
-            return False, []
+            page = self._list_recent_executions(
+                include_data=False,
+                since=now - self.config.source_lookback_seconds,
+                status="error",
+            )
+        except Exception as exc:  # noqa: BLE001 - a failed read must become an observable unhealthy cycle
+            LOGGER.warning("n8n execution collection failed (%s)", type(exc).__name__)
+            return False, [], False
+        rows: List[Mapping[str, Any]] = []
         if self.config.workflow_ids:
-            rows = [row for row in rows if _workflow_id(row) in self.config.workflow_ids]
-        return True, rows
+            page_rows = [row for row in page.rows if _workflow_id(row) in self.config.workflow_ids]
+        else:
+            page_rows = page.rows
+        for row in page_rows:
+            # Public API v1 metadata omits execution.data and often omits the
+            # error text. The source query is status=error, so a missing
+            # startedAt is enough to select a bounded detail read for the
+            # queue-level boundary; the detail read supplies the signature.
+            if not has_queue_failure_signature(row) and row.get("startedAt") not in (None, ""):
+                continue
+            if is_queue_failure(row):
+                rows.append(row)
+                continue
+            execution_id = str(row.get("id") or "")
+            if not execution_id:
+                continue
+            try:
+                detail = self.api.get_execution(execution_id)
+            except Exception as exc:  # noqa: BLE001 - preserve an observable coverage failure
+                LOGGER.warning("n8n execution detail read failed (%s)", type(exc).__name__)
+                self.execution_detail_failures_last_cycle += 1
+                self.execution_detail_failures_total += 1
+                continue
+            expanded = dict(row)
+            expanded.update(detail)
+            if is_queue_failure(expanded):
+                rows.append(expanded)
+        complete = not page.next_cursor and self.execution_detail_failures_last_cycle == 0
+        return True, rows, complete
 
     def _notification_rows(
         self,
-    ) -> Optional[Tuple[List[Mapping[str, Any]], List[Mapping[str, Any]]]]:
+        now: float,
+    ) -> Optional[NotificationRows]:
         """Read each notification workflow once per scrape, not once per failure."""
 
         if not self.config.error_workflow_id:
             return None
+        self.notification_correlation_attempted = True
         try:
-            handler_rows = self.api.list_executions(self.config.error_workflow_id, self.config.execution_limit)
-            slack_rows: List[Mapping[str, Any]] = []
+            handler_page = self._list_recent_executions(
+                self.config.error_workflow_id,
+                include_data=True,
+                since=now - self.config.source_lookback_seconds,
+            )
+            slack_page = ExecutionPage([], "")
             if self.config.slack_workflow_id:
-                slack_rows = self.api.list_executions(self.config.slack_workflow_id, self.config.execution_limit)
-            return handler_rows, slack_rows
-        except (HTTPError, URLError, OSError, RuntimeError, ValueError, json.JSONDecodeError):
+                slack_page = self._list_recent_executions(
+                    self.config.slack_workflow_id,
+                    include_data=True,
+                    since=now - self.config.source_lookback_seconds,
+                )
+            complete = not handler_page.next_cursor and not slack_page.next_cursor
+            self.notification_correlation_up = complete
+            if not complete:
+                self.notification_correlation_failures_total += 1
+            return NotificationRows(handler_page.rows, slack_page.rows, complete)
+        except Exception as exc:  # noqa: BLE001 - preserve the core unnotified signal on dependency failure
+            LOGGER.warning("n8n notification correlation failed (%s)", type(exc).__name__)
+            self.notification_correlation_up = False
+            self.notification_correlation_failures_total += 1
             return None
 
     def _notification_state(
         self,
         source_id: str,
-        notification_rows: Optional[Tuple[List[Mapping[str, Any]], List[Mapping[str, Any]]]],
+        notification_rows: Optional[NotificationRows],
     ) -> Optional[bool]:
-        if not self.config.error_workflow_id or notification_rows is None:
+        if not self.config.error_workflow_id:
             return None
-        handler_rows, slack_rows = notification_rows
+        if notification_rows is None:
+            return False
+        handler_rows, slack_rows = notification_rows.handler, notification_rows.slack
         handler_ok = any(_successful(row) and handler_references_execution(row, source_id) for row in handler_rows)
         if not handler_ok:
             return False
         if not self.config.slack_workflow_id:
             return True
-        return any(_successful(row) and handler_references_execution(row, source_id) for row in slack_rows)
+        slack_ok = any(_successful(row) and handler_references_execution(row, source_id) for row in slack_rows)
+        return slack_ok
 
     def _prune_failures(self, now: float) -> None:
         cutoff = now - self.config.failure_retention_seconds
@@ -503,7 +763,9 @@ class WatchdogCollector:
             ):
                 return self.last_body
 
-            api_up, executions = self._source_executions()
+            self.notification_correlation_attempted = False
+            self.notification_correlation_up = False
+            api_up, executions, self.execution_coverage_complete = self._source_executions(now)
             for execution in executions:
                 if not is_queue_failure(execution):
                     continue
@@ -530,7 +792,7 @@ class WatchdogCollector:
                 self.failures.move_to_end(execution_id)
 
             self._prune_failures(now)
-            notification_rows = self._notification_rows() if self.failures else None
+            notification_rows = self._notification_rows(now) if self.failures else None
             for execution_id, state in self.failures.items():
                 state.notified = self._notification_state(execution_id, notification_rows)
             redis_configured = bool(self.config.redis_host)
@@ -546,14 +808,50 @@ class WatchdogCollector:
             lines += _metric_block(
                 "n8n_watchdog_collection_success",
                 "gauge",
-                "Whether the watchdog completed its most recent collection cycle.",
-                [metric_line("n8n_watchdog_collection_success", 1)],
+                "Whether the most recent n8n execution collection was complete and healthy.",
+                [metric_line("n8n_watchdog_collection_success", int(api_up and self.execution_coverage_complete))],
             )
             lines += _metric_block(
                 "n8n_watchdog_last_collection_timestamp_seconds",
                 "gauge",
                 "Unix timestamp of the most recent watchdog collection cycle.",
                 [metric_line("n8n_watchdog_last_collection_timestamp_seconds", now)],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_execution_coverage_complete",
+                "gauge",
+                "Whether the bounded n8n execution listing reached its time boundary without pagination ambiguity.",
+                [metric_line("n8n_watchdog_execution_coverage_complete", int(self.execution_coverage_complete))],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_execution_detail_failures_total",
+                "counter",
+                "Execution detail requests that failed while classifying a queue candidate.",
+                [metric_line("n8n_watchdog_execution_detail_failures_total", self.execution_detail_failures_total)],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_notification_correlation_configured",
+                "gauge",
+                "Whether an n8n error workflow ID is configured for notification correlation.",
+                [metric_line("n8n_watchdog_notification_correlation_configured", int(bool(self.config.error_workflow_id)))],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_notification_correlation_attempted",
+                "gauge",
+                "Whether notification correlation was attempted during the most recent collection.",
+                [metric_line("n8n_watchdog_notification_correlation_attempted", int(self.notification_correlation_attempted))],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_notification_correlation_up",
+                "gauge",
+                "Whether all required notification correlation reads completed without pagination ambiguity.",
+                [metric_line("n8n_watchdog_notification_correlation_up", int(self.notification_correlation_up))],
+            )
+            lines += _metric_block(
+                "n8n_watchdog_notification_correlation_failures_total",
+                "counter",
+                "Notification correlation reads that failed or were incomplete.",
+                [metric_line("n8n_watchdog_notification_correlation_failures_total", self.notification_correlation_failures_total)],
             )
             component_values = {
                 "n8n_api": (self.api.configured, api_up),
