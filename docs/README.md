@@ -14,6 +14,7 @@ procedures.
 | [CALCOM_SETUP.md](CALCOM_SETUP.md) | Cal.com setup and calendar integration |
 | [../cloudflare-instructions.md](../cloudflare-instructions.md) | Cloudflare Tunnel design and safety |
 | [../vexa-troubleshooting-workarounds.md](../vexa-troubleshooting-workarounds.md) | Vexa lifecycle and troubleshooting |
+| [N8N-MCP authentication](n8n-mcp-auth.md) | Public API JWT and inbound MCP token contract |
 
 ## Authoritative implementation sources
 

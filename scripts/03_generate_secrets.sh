@@ -110,7 +110,8 @@ declare -A VARS_TO_GENERATE=(
     ["BROWSERLESS_TOKEN"]="apikey:32"
     ["SKYVERN_API_KEY"]="apikey:32"
     ["N8N_MCP_TOKEN"]="apikey:32"
-    ["N8N_API_KEY"]="apikey:32"
+    # N8N_API_KEY is intentionally not generated. When n8n-mcp is selected,
+    # it must be supplied as a real n8n public API JWT from n8n Settings -> API.
     ["GPTR_PASSWORD"]="password:32"
     ["SEAFILE_DB_ROOT_PASSWORD"]="password:32"
     ["SEAFILE_DB_PASSWORD"]="password:32"
@@ -154,6 +155,13 @@ if [ -f "$OUTPUT_FILE" ]; then
             existing_env_vars["$varName"]="$varValue"
         fi
     done < "$OUTPUT_FILE"
+fi
+
+# An existing n8n-mcp selection must already have an externally issued public
+# API JWT before any installation side effects are attempted. A blank key is
+# allowed when the optional profile is not selected.
+if ! require_n8n_mcp_api_key "${existing_env_vars[COMPOSE_PROFILES]-}" "${existing_env_vars[N8N_API_KEY]-}"; then
+    exit 1
 fi
 
 # Install Caddy
