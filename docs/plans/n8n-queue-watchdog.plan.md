@@ -36,6 +36,11 @@ does not add credentials, database writes, or deployment actions.
   routes only queue-watchdog critical/warning alerts to the operator-supplied
   HTTPS Slack webhook, and fails closed when its root-owned receiver file is
   absent, empty, oversized, or not HTTPS.
+- The receiver path is external, absolute, regular, non-symlink, and on Unix
+  owned by `root:65534` with mode `0440` or `0640`; all monitoring image tags
+  are explicit version pins.
+- A critical watchdog alert inhibits warning symptoms from the same scrape job
+  without inhibiting distinct critical causes.
 - No ai-n8n-trading file, production state, host state, or secret changes.
 - The Compose profile cannot advertise an exporter target without defining the
   matching watchdog service in the same configuration change.

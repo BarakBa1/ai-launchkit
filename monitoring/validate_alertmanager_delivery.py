@@ -2,12 +2,43 @@
 """Fail closed when the monitoring profile lacks its Slack receiver secret."""
 
 import os
+import stat
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
 
 MAX_RECEIVER_FILE_BYTES = 4096
+RECEIVER_GID = 65534
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def is_secure_receiver_file(path: Path) -> bool:
+    """Require a bounded, external, regular file with container-readable Unix metadata."""
+
+    if not path.is_absolute():
+        return False
+    try:
+        path.resolve(strict=False).relative_to(REPOSITORY_ROOT.resolve())
+        return False
+    except ValueError:
+        pass
+    except (OSError, RuntimeError):
+        return False
+
+    try:
+        file_stat = path.lstat()
+        if not stat.S_ISREG(file_stat.st_mode):
+            return False
+        if os.name == "posix":
+            mode = stat.S_IMODE(file_stat.st_mode)
+            if file_stat.st_uid != 0 or file_stat.st_gid != RECEIVER_GID:
+                return False
+            if mode & ~0o640 or mode & 0o440 != 0o440:
+                return False
+        return os.access(path, os.R_OK)
+    except OSError:
+        return False
 
 
 def main() -> int:
@@ -27,8 +58,7 @@ def main() -> int:
     path = Path(secret_file)
     try:
         valid = (
-            path.is_file()
-            and os.access(path, os.R_OK)
+            is_secure_receiver_file(path)
             and 0 < path.stat().st_size <= MAX_RECEIVER_FILE_BYTES
         )
         if valid:

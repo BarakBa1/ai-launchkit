@@ -75,7 +75,15 @@ The same profile starts the pinned `alertmanager` service and Prometheus sends
 alerts to `alertmanager:9093` over the private Compose network. Alertmanager
 routes only `n8n-queue` and `n8n-queue-watchdog` alerts with `critical` or
 `warning` severity to Slack; unrelated alerts go to a discard receiver.
+When a critical watchdog alert is active, it inhibits warning alerts from the
+same watchdog scrape job; distinct critical alerts, including queue-failure
+alerts, remain visible.
 Alertmanager is intentionally not exposed through Caddy.
+
+The monitoring images are version-pinned: Python `3.12.14-alpine3.24`,
+Prometheus `v3.5.0`, Alertmanager `v0.28.1`, node-exporter `v1.11.1`, cAdvisor
+`v0.60.5`, and Grafana `13.2.2`. Review and update these pins as a coordinated
+monitoring change.
 
 The Slack incoming-webhook URL is supplied through a root-owned file, never
 committed to this repository. Set `ALERTMANAGER_SLACK_WEBHOOK_FILE` in the
@@ -86,7 +94,10 @@ profile. The Compose secret is mounted read-only at
 Alertmanager's `api_url_file` field. The installer runs
 `monitoring/validate_alertmanager_delivery.py` before starting services, and
 the Alertmanager entrypoint fails closed if the mounted file is absent, empty,
-or not an HTTPS URL. Non-monitoring profiles do not require the file.
+or not an HTTPS URL. On Unix, validation also requires an external regular
+non-symlink file owned by `root:65534` with mode `0440` or `0640`; relative or
+repository-local paths are rejected. Non-monitoring profiles do not require
+the file.
 
 For example, create the protected placeholder and then populate it through the
 operator's secret-management process:

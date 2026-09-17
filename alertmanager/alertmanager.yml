@@ -19,3 +19,12 @@ receivers:
     slack_configs:
       - api_url_file: /run/secrets/alertmanager_slack_webhook
         send_resolved: true
+
+inhibit_rules:
+  - source_matchers:
+      - 'severity="critical"'
+      - 'component="n8n-queue-watchdog"'
+    target_matchers:
+      - 'severity="warning"'
+      - 'component="n8n-queue-watchdog"'
+    equal: ["job"]

@@ -91,7 +91,7 @@ volumes:
 
 secrets:
   alertmanager_slack_webhook:
-    file: ${ALERTMANAGER_SLACK_WEBHOOK_FILE:-./.secrets/alertmanager-slack-webhook}
+    file: ${ALERTMANAGER_SLACK_WEBHOOK_FILE}
 
 x-n8n: &service-n8n
   build:
@@ -341,7 +341,7 @@ services:
       - host.docker.internal:host-gateway
 
   n8n-queue-watchdog:
-    image: python:3.12-alpine
+    image: python:3.12.14-alpine3.24
     container_name: n8n-queue-watchdog
     profiles: ["monitoring"]
     restart: unless-stopped
@@ -1033,7 +1033,7 @@ services:
       start_period: 10s
 
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.11.1
     container_name: node-exporter
     profiles: ["monitoring"]
     restart: unless-stopped
@@ -1049,7 +1049,7 @@ services:
       - 9100
 
   cadvisor:
-    image: gcr.io/cadvisor/cadvisor:latest
+    image: ghcr.io/google/cadvisor:v0.60.5
     container_name: cadvisor
     profiles: ["monitoring"]
     restart: unless-stopped
@@ -1062,7 +1062,7 @@ services:
       - 8080
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.2
     container_name: grafana
     profiles: ["monitoring"]
     restart: unless-stopped
