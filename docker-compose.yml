@@ -2849,7 +2849,17 @@ services:
     volumes:
       - n8n-mcp-data:/app/data
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test:
+        - CMD-SHELL
+        - >-
+          test -n "$$N8N_API_KEY" &&
+          curl --silent --fail --output /dev/null --connect-timeout 5 --max-time 10
+          http://localhost:3000/health &&
+          status="$$(curl --silent --output /dev/null --write-out '%{http_code}'
+          --connect-timeout 5 --max-time 10
+          --header "X-N8N-API-KEY: $$N8N_API_KEY"
+          "$$N8N_API_URL/api/v1/workflows?limit=1")" &&
+          case "$$status" in 2??) exit 0 ;; *) exit 1 ;; esac
       interval: 30s
       timeout: 10s
       retries: 3

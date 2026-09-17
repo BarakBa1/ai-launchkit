@@ -69,8 +69,9 @@ manual encyclopedia.
 - `N8N_MCP_TOKEN` and `N8N_API_KEY` are separate credentials. The former is the
   generated inbound n8n-MCP token. If the `n8n-mcp` profile is selected, the
   latter must be a public API JWT issued by n8n under Settings -> API; the
-  generator and wizard fail before starting services if it is missing or has
-  the wrong shape. A blank `N8N_API_KEY` is valid when that profile is unused.
+  generator and wizard reject missing or malformed values, and the service
+  runner verifies the key against `N8N_URL` before starting. A blank
+  `N8N_API_KEY` is valid when that profile is unused.
 - Prefer service-to-service Docker networking. Expose only required public
   routes through Caddy or an explicitly designed Cloudflare Tunnel.
 - A Cloudflare Tunnel can bypass Caddy protections; read

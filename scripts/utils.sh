@@ -58,17 +58,19 @@ n8n_mcp_profile_enabled() {
     [[ ",$profiles," == *,n8n-mcp,* ]]
 }
 
-# Validate the non-secret shape that n8n uses for public API JWTs. Signature
-# verification is intentionally not attempted here; issuance remains an n8n UI
-# responsibility. The payload audience prevents generic generated secrets from
-# being accepted as an API credential.
-n8n_public_api_key_is_jwt() {
+# Return a cheap, non-authoritative shape hint for n8n public API JWTs.
+# Signature and issuer verification are intentionally not attempted here;
+# issuance remains an n8n UI responsibility and the live API check below is
+# authoritative. The payload audience rejects generic generated secrets early.
+n8n_public_api_key_shape_hint() {
     local key="${1:-}"
     local header_segment=""
     local payload_segment=""
     local signature_segment=""
     local padded_payload=""
     local payload_json=""
+    local expires_at=""
+    local current_time=""
 
     [[ "$key" =~ ^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$ ]] || return 1
     IFS='.' read -r header_segment payload_segment signature_segment <<< "$key"
@@ -83,7 +85,17 @@ n8n_public_api_key_is_jwt() {
     esac
 
     payload_json=$(printf '%s' "$padded_payload" | base64 --decode 2>/dev/null) || return 1
-    [[ "$payload_json" =~ \"aud\"[[:space:]]*:[[:space:]]*\"public-api\" ]]
+    [[ "$payload_json" =~ \"aud\"[[:space:]]*:[[:space:]]*\"public-api\" ]] || return 1
+
+    # If an expiry claim is present, reject it locally before making a network
+    # request. The public API remains authoritative for signature/issuer checks.
+    if [[ "$payload_json" =~ \"exp\"[[:space:]]*:[[:space:]]*([0-9]+) ]]; then
+        expires_at="${BASH_REMATCH[1]}"
+        current_time=$(date +%s) || return 1
+        (( expires_at > current_time )) || return 1
+    fi
+
+    return 0
 }
 
 # Enforce the n8n-mcp credential contract without ever echoing the supplied
@@ -101,10 +113,59 @@ require_n8n_mcp_api_key() {
         return 1
     fi
 
-    if ! n8n_public_api_key_is_jwt "$key"; then
-        log_error "N8N_API_KEY must be an n8n-issued public API JWT with audience public-api when n8n-mcp is enabled."
+    if ! n8n_public_api_key_shape_hint "$key"; then
+        log_error "N8N_API_KEY must be an n8n-issued public API JWT with audience public-api and a future expiry when n8n-mcp is enabled."
         return 1
     fi
 
     return 0
+}
+
+# Authoritatively validate the key against n8n's public API. This is kept out
+# of generator/wizard checks so a configuration edit does not unexpectedly
+# depend on network availability; the service runner calls it immediately
+# before launch. Only the HTTP status is captured or reported.
+require_n8n_mcp_api_key_live() {
+    local profiles="${1:-}"
+    local key="${2:-}"
+    local n8n_url="${3:-}"
+    local n8n_url_host=""
+    local api_url=""
+    local api_status=""
+
+    if ! n8n_mcp_profile_enabled "$profiles"; then
+        return 0
+    fi
+
+    if ! require_n8n_mcp_api_key "$profiles" "$key"; then
+        return 1
+    fi
+
+    n8n_url_host="${n8n_url#https://}"
+    if [[ "$n8n_url" != https://* || -z "$n8n_url_host" || "$n8n_url_host" == /* || \
+          "$n8n_url" == *[[:space:]]* || "$n8n_url" == *"@"* || \
+          "$n8n_url" == *"?"* || "$n8n_url" == *"#"* ]]; then
+        log_error "N8N_URL must be configured as an HTTPS n8n public API base URL when n8n-mcp is enabled."
+        return 1
+    fi
+
+    api_url="${n8n_url%/}/api/v1/workflows?limit=1"
+    api_status=$(curl \
+        --silent \
+        --output /dev/null \
+        --write-out '%{http_code}' \
+        --connect-timeout 5 \
+        --max-time 10 \
+        --header "X-N8N-API-KEY: $key" \
+        "$api_url" 2>/dev/null) || {
+        log_error "N8N_API_KEY live validation failed due to an n8n API network error."
+        return 1
+    }
+
+    if [[ "$api_status" =~ ^2[0-9][0-9]$ ]]; then
+        return 0
+    fi
+
+    log_error "N8N_API_KEY live validation failed against the n8n API (HTTP ${api_status:-unknown})."
+    return 1
 }

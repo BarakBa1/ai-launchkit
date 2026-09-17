@@ -21,7 +21,7 @@ fi
 # N8N_MCP_TOKEN remains the inbound MCP token; N8N_API_KEY must be an
 # externally issued n8n public API JWT when n8n-mcp is selected.
 source .env
-if ! require_n8n_mcp_api_key "${COMPOSE_PROFILES:-}" "${N8N_API_KEY:-}"; then
+if ! require_n8n_mcp_api_key_live "${COMPOSE_PROFILES:-}" "${N8N_API_KEY:-}" "${N8N_URL:-}"; then
   exit 1
 fi
 
