@@ -16,9 +16,11 @@ does not add credentials, database writes, or deployment actions.
    probes, stable metric labels, and in-process event deduplication.
 3. Add Prometheus scrape/rule integration, a monitoring-profile Compose
    service, and a systemd alternative without real endpoints or secrets.
-4. Document installation, read-only boundaries, Alertmanager prerequisite,
-   rollback, and known limitations.
-5. Run focused tests, shell/Compose/config validation, and repository checks;
+4. Add the pinned monitoring-profile Alertmanager delivery service, fail-fast
+   receiver-secret validation, and operator-facing setup/readback/reporting.
+5. Document installation, read-only boundaries, rollback, and known
+   limitations.
+6. Run focused tests, shell/Compose/config validation, and repository checks;
    inspect the final diff and commit only the isolated branch.
 
 ## Acceptance criteria
@@ -30,7 +32,10 @@ does not add credentials, database writes, or deployment actions.
 - Redis, PostgreSQL, n8n API, and worker probes fail closed without leaking
   credentials.
 - Metrics are bounded by configured workflow labels and rules are compatible
-  with Prometheus/Alertmanager without assuming an Alertmanager endpoint.
+  with Prometheus/Alertmanager. The monitoring profile starts both services,
+  routes only queue-watchdog critical/warning alerts to the operator-supplied
+  HTTPS Slack webhook, and fails closed when its root-owned receiver file is
+  absent, empty, oversized, or not HTTPS.
 - No ai-n8n-trading file, production state, host state, or secret changes.
 - The Compose profile cannot advertise an exporter target without defining the
   matching watchdog service in the same configuration change.

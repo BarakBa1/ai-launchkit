@@ -1,0 +1,21 @@
+global:
+  resolve_timeout: 5m
+
+route:
+  group_by: ["alertname", "component"]
+  group_wait: 30s
+  group_interval: 5m
+  repeat_interval: 4h
+  receiver: discard
+  routes:
+    - matchers:
+        - 'component=~"n8n-queue(-watchdog)?"'
+        - 'severity=~"critical|warning"'
+      receiver: n8n-queue-watchdog-slack
+
+receivers:
+  - name: discard
+  - name: n8n-queue-watchdog-slack
+    slack_configs:
+      - api_url_file: /run/secrets/alertmanager_slack_webhook
+        send_resolved: true

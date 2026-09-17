@@ -18,6 +18,7 @@ volumes:
   libretranslate_db:
   grafana:
   prometheus_data:
+  alertmanager_data:
   letta_data:
   weaviate_data:
   portainer_data:
@@ -87,6 +88,10 @@ volumes:
   paperless_data:
   paperless_media:
   miniflux_data:
+
+secrets:
+  alertmanager_slack_webhook:
+    file: ${ALERTMANAGER_SLACK_WEBHOOK_FILE:-./.secrets/alertmanager-slack-webhook}
 
 x-n8n: &service-n8n
   build:
@@ -963,20 +968,69 @@ services:
     depends_on:
       - ollama-gpu-amd
 
+  alertmanager:
+    image: prom/alertmanager:v0.28.1
+    container_name: alertmanager
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    user: "65534:65534"
+    entrypoint: ["/bin/sh", "/etc/alertmanager/entrypoint.sh"]
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./alertmanager/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - ./alertmanager/entrypoint.sh:/etc/alertmanager/entrypoint.sh:ro
+      - alertmanager_data:/alertmanager
+    secrets:
+      - source: alertmanager_slack_webhook
+        target: alertmanager_slack_webhook
+    expose:
+      - "9093"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9093/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
+
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.5.0
     container_name: prometheus
     profiles: ["monitoring"]
     restart: unless-stopped
+    user: "65534:65534"
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
     depends_on:
       n8n-queue-watchdog:
         condition: service_started
+      alertmanager:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O", "-", "http://127.0.0.1:9090/-/ready"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   node-exporter:
     image: prom/node-exporter:latest

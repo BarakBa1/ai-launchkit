@@ -63,7 +63,7 @@ base_services_data=(
     "searxng" "SearXNG (Private Metasearch Engine)"
     "miniflux" "Miniflux (Minimalist and opinionated feed reader)"
     "langfuse" "Langfuse Suite (AI Observability - includes Clickhouse, Minio)"
-    "monitoring" "Monitoring Suite (Prometheus, Grafana, Queue Watchdog, cAdvisor, Node-Exporter)"
+    "monitoring" "Monitoring Suite (Prometheus, Alertmanager, Slack alerts, Queue Watchdog, Grafana)"
     "cloudflare-tunnel" "Cloudflare Tunnel (Zero-Trust Secure Access)"
     "flowise" "Flowise (AI Agent Builder)"
     "n8n-mcp" "n8n-MCP (AI workflow generation for Claude/Cursor)"
@@ -353,6 +353,9 @@ if [ -z "$COMPOSE_PROFILES_VALUE" ]; then
     log_info "Only core services (Caddy, Postgres, Redis) will be started."
 else
     log_info "The following Docker Compose profiles will be active: ${COMPOSE_PROFILES_VALUE}"
+    if [[ ",$COMPOSE_PROFILES_VALUE," == *",monitoring,"* ]]; then
+        log_info "Monitoring alert delivery requires a non-empty root-owned ALERTMANAGER_SLACK_WEBHOOK_FILE before services start."
+    fi
 fi
 
 # Speech Stack Authentication Setup (if speech profile was selected)

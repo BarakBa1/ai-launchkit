@@ -155,6 +155,9 @@ if is_profile_active "monitoring"; then
   echo "n8n Queue Watchdog: internal service n8n-queue-watchdog:9105"
   echo "API URL: set in N8N_WATCHDOG_API_URL (value omitted)"
   echo "Metrics: scraped by the Prometheus monitoring profile"
+  echo "Alertmanager: internal service alertmanager:9093"
+  echo "Slack receiver: configured from ALERTMANAGER_SLACK_WEBHOOK_FILE (value omitted)"
+  echo "Alert delivery: watchdog critical/warning alerts only"
 fi
 
 if is_profile_active "searxng"; then

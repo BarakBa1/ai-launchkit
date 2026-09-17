@@ -71,9 +71,36 @@ on the host; do not enable both instances for the same target.
 `prometheus/prometheus.yml` scrapes `n8n-queue-watchdog:9105` when the
 `monitoring` profile is enabled. It also loads
 `prometheus/rules/n8n_queue_watchdog.yml` through a read-only rules mount.
-This repository contains no Alertmanager service or endpoint configuration.
-The operator must configure the existing external Alertmanager receiver during
-rollout; the rule file alone evaluates alerts but cannot deliver them.
+The same profile starts the pinned `alertmanager` service and Prometheus sends
+alerts to `alertmanager:9093` over the private Compose network. Alertmanager
+routes only `n8n-queue` and `n8n-queue-watchdog` alerts with `critical` or
+`warning` severity to Slack; unrelated alerts go to a discard receiver.
+Alertmanager is intentionally not exposed through Caddy.
+
+The Slack incoming-webhook URL is supplied through a root-owned file, never
+committed to this repository. Set `ALERTMANAGER_SLACK_WEBHOOK_FILE` in the
+operator `.env` (the example defaults to `/etc/ai-launchkit/alertmanager-slack-webhook`)
+and create a non-empty file at that path before selecting the `monitoring`
+profile. The Compose secret is mounted read-only at
+`/run/secrets/alertmanager_slack_webhook`; the configuration uses
+Alertmanager's `api_url_file` field. The installer runs
+`monitoring/validate_alertmanager_delivery.py` before starting services, and
+the Alertmanager entrypoint fails closed if the mounted file is absent, empty,
+or not an HTTPS URL. Non-monitoring profiles do not require the file.
+
+For example, create the protected placeholder and then populate it through the
+operator's secret-management process:
+
+```bash
+sudo install -o root -g 65534 -m 0640 /dev/null /etc/ai-launchkit/alertmanager-slack-webhook
+sudoedit /etc/ai-launchkit/alertmanager-slack-webhook
+```
+
+The file must remain owned by `root`, be readable by the container's fixed
+UID/GID `65534:65534`, and contain the HTTPS Slack incoming-webhook URL on one
+line. File-backed Compose secrets are bind mounts, so `root:root` mode `0600`
+would make the non-root Alertmanager unable to read the file. Do not print the
+URL in shell output, logs, reports, or support requests.
 
 Because the alert labels contain workflow identity but not execution IDs,
 Alertmanager deduplicates repeated scrapes for the same workflow. The process
@@ -84,22 +111,24 @@ deduplication boundary.
 ## Rollout and rollback
 
 Rollout requires an explicit production change window and review of the exact
-workflow IDs, API key scope, Prometheus reload, and external Alertmanager
-receiver. Create a dedicated n8n read-only API key if the n8n installation
+workflow IDs, API key scope, Prometheus reload, and operator-supplied Slack
+receiver file. Create a dedicated n8n read-only API key if the n8n installation
 supports that scope. Do not run this using a broad database or Docker-socket
 credential. For the Compose profile, verify the watchdog service and
 Prometheus target are enabled together; for the systemd alternative, install
 the unit and configure the matching target deliberately.
 
 The first production readback must verify `/healthz`, `/metrics`, Prometheus
-target health, rule loading, and one synthetic/read-only fixture evaluation.
-Do not execute an n8n workflow or mutate broker/database state to test it.
+target health, rule loading, Alertmanager `/api/v2/status` and receivers, and
+one synthetic/read-only fixture evaluation. Do not execute an n8n workflow or
+mutate broker/database state to test it.
 
-Rollback is to stop/disable the selected watchdog service, remove the watchdog
-scrape/rules mount, reload Prometheus, and verify the previous target/rule
-state. No n8n,
-Redis, PostgreSQL, broker, credential, schedule, or workflow mutation is part
-of this implementation.
+Rollback is to stop/disable the selected watchdog and Alertmanager services,
+restore the previous Prometheus configuration and rules, reload Prometheus, and
+verify the previous target/rule state. Preserve the operator-managed webhook
+file and restore its previous path setting if the Compose environment changed.
+No n8n, Redis, PostgreSQL, broker, credential, schedule, or workflow mutation
+is part of this implementation.
 
 ## Limitations
 

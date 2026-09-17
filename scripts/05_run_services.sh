@@ -70,6 +70,11 @@ if [ -f "./scripts/setup_postal.sh" ]; then
 fi
 
 # Build services that need local compilation
+export COMPOSE_PROFILES ALERTMANAGER_SLACK_WEBHOOK_FILE
+if ! python3 ./monitoring/validate_alertmanager_delivery.py; then
+    log_error "Monitoring alert delivery validation failed; refusing to start services."
+    exit 1
+fi
 if [[ "$COMPOSE_PROFILES" == *"tts-chatterbox"* ]]; then
     log_info "Checking Chatterbox Frontend..."
     # Clone the repository if not exists
