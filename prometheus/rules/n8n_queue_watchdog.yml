@@ -1,0 +1,42 @@
+groups:
+  - name: n8n-queue-watchdog
+    rules:
+      - alert: N8nQueueWatchdogTargetDown
+        expr: up{job="n8n-queue-watchdog"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog scrape target is down
+          description: Prometheus cannot scrape the independent n8n queue watchdog.
+
+      - alert: N8nQueueWatchdogDown
+        expr: time() - n8n_watchdog_last_collection_timestamp_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog is stale
+          description: The independent n8n queue watchdog has not completed a collection cycle for more than two minutes.
+
+      - alert: N8nQueueFailureUnnotified
+        expr: n8n_queue_failure_unnotified > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: n8n-queue
+        annotations:
+          summary: n8n queue failure has no notification receipt
+          description: A zero-node Bull queue failure has no successful configured error and Slack notification path.
+
+      - alert: N8nQueueWatchdogComponentDown
+        expr: n8n_watchdog_component_configured == 1 and on (component) n8n_watchdog_component_up == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog dependency probe failed
+          description: A configured n8n, worker, Redis, PostgreSQL, or API probe is unavailable.

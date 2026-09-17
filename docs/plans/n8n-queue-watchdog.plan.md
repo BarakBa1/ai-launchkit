@@ -1,0 +1,33 @@
+# n8n Queue Watchdog Plan
+
+## Scope
+
+Add a host-run, read-only Prometheus exporter for n8n queue failures and
+dependency health. Keep the collector outside the n8n execution queue, use only
+Python's standard library, and avoid Compose services, credentials, database
+writes, and deployment changes.
+
+## Ordered tasks
+
+1. Add focused tests for queue-failure classification, nested handler
+   correlation, bounded Redis RESP parsing, and Prometheus exposition.
+2. Implement the stdlib collector/server with explicit configuration, bounded
+   probes, stable metric labels, and in-process event deduplication.
+3. Add Prometheus scrape/rule integration and a systemd example without real
+   endpoints or secrets.
+4. Document installation, read-only boundaries, Alertmanager prerequisite,
+   rollback, and known limitations.
+5. Run focused tests, shell/Compose/config validation, and repository checks;
+   inspect the final diff and commit only the isolated branch.
+
+## Acceptance criteria
+
+- Queue failures require an error status, Bull timeout signature, and either a
+  missing start timestamp or zero executed nodes.
+- Handler correlation is optional and never reports a missing notification when
+  required IDs are not configured.
+- Redis, PostgreSQL, n8n API, and worker probes fail closed without leaking
+  credentials.
+- Metrics are bounded by configured workflow labels and rules are compatible
+  with Prometheus/Alertmanager without assuming an Alertmanager endpoint.
+- No ai-n8n-trading file, production state, Docker service, or secret changes.
