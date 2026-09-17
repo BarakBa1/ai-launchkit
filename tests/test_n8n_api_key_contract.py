@@ -4,6 +4,8 @@ import unittest
 import os
 import json
 import tempfile
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 
@@ -39,6 +41,13 @@ def compose_command():
             return [docker, "compose"]
 
     raise unittest.SkipTest("Docker Compose CLI is required for Compose contract tests")
+
+
+def node_executable():
+    node = shutil.which("node")
+    if node is None:
+        raise unittest.SkipTest("Node.js is required for n8n-mcp entrypoint tests")
+    return node
 
 
 class N8nApiKeyContractTest(unittest.TestCase):
@@ -96,10 +105,11 @@ class N8nApiKeyContractTest(unittest.TestCase):
             command = (
                 f'source "{UTILS_PATH}"; '
                 f'curl() {{ printf "%s" "{status}"; : > "{marker_path}"; return {curl_exit}; }}; '
-                f'require_n8n_mcp_api_key_live "{profiles}" "{key}" "{url}"; '
+                f'require_n8n_mcp_api_key_live "{profiles}" "{url}"; '
                 f'rc=$?; if [ -f "{marker_path}" ]; then printf "\\n__curl_called=1\\n"; '
                 f'else printf "\\n__curl_called=0\\n"; fi; exit "$rc"'
             )
+            environment["N8N_API_KEY"] = key
             return subprocess.run(
                 [bash_executable(), "-c", command],
                 cwd=REPOSITORY_ROOT,
@@ -166,9 +176,13 @@ class N8nApiKeyContractTest(unittest.TestCase):
 
     def test_service_runner_validates_before_launching_services(self):
         source = (REPOSITORY_ROOT / "scripts" / "05_run_services.sh").read_text(encoding="utf-8")
-        validation = source.index("require_n8n_mcp_api_key_live")
+        validation = source.index('require_n8n_mcp_api_key "${COMPOSE_PROFILES:-}"')
         launch = source.index("./start_services.py")
         self.assertLess(validation, launch)
+        self.assertNotIn(
+            'require_n8n_mcp_api_key_live "${COMPOSE_PROFILES:-}"',
+            source,
+        )
 
     def test_n8n_mcp_rejection_does_not_echo_supplied_secret(self):
         generic_secret = "a" * 32
@@ -250,6 +264,8 @@ class N8nApiKeyContractTest(unittest.TestCase):
         self.assertIn("--connect-timeout 5", source)
         self.assertIn("--max-time 10", source)
         self.assertIn("/api/v1/workflows?limit=1", source)
+        self.assertIn("--header @-", source)
+        self.assertNotIn('--header "X-N8N-API-KEY: $key"', source)
 
     def test_n8n_mcp_rejects_a_generic_hex_secret(self):
         result = self.run_validator("n8n-mcp", "a" * 32)
@@ -303,27 +319,207 @@ class N8nApiKeyContractTest(unittest.TestCase):
         config = self.render_compose("n8n", api_key=None)
         self.assertNotIn("n8n-mcp", config["services"])
 
-    def test_compose_mcp_healthcheck_fails_closed_for_missing_api_key(self):
+    def test_compose_mcp_healthcheck_only_reports_live_mcp_process(self):
         config = self.render_compose("n8n-mcp", api_key="")
         healthcheck = config["services"]["n8n-mcp"]["healthcheck"]["test"]
         healthcheck_command = " ".join(str(part) for part in healthcheck)
-        self.assertIn('test -n "$$N8N_API_KEY"', healthcheck_command)
-        self.assertIn("X-N8N-API-KEY", healthcheck_command)
         self.assertIn("curl", healthcheck_command)
+        self.assertIn("/health", healthcheck_command)
+        self.assertNotIn("N8N_API_KEY", healthcheck_command)
 
         result = self.run_compose_healthcheck(config, "", "200")
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0)
 
-    def test_compose_mcp_healthcheck_probes_and_rejects_authoritative_401(self):
+    def test_compose_mcp_healthcheck_does_not_revalidate_secret_in_process_args(self):
         config = self.render_compose("n8n-mcp", api_key="forged-api-key")
         healthcheck = config["services"]["n8n-mcp"]["healthcheck"]["test"]
         healthcheck_command = " ".join(str(part) for part in healthcheck)
-        self.assertIn('case "$$status" in 2??)', healthcheck_command)
-        self.assertIn("exit 1", healthcheck_command)
+        self.assertNotIn("X-N8N-API-KEY", healthcheck_command)
+        self.assertNotIn("N8N_API_KEY", healthcheck_command)
 
         result = self.run_compose_healthcheck(config, "forged-api-key", "401")
-        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(result.returncode, 0)
         self.assertIn("__curl_called", result.stdout + result.stderr)
+
+    def test_direct_mcp_profile_selects_core_n8n_services(self):
+        config = self.render_compose("n8n-mcp", api_key="forged-api-key")
+
+        self.assertIn("n8n-import", config["services"])
+        self.assertIn("n8n", config["services"])
+
+    def test_n8n_is_healthy_before_mcp_can_start(self):
+        config = self.render_compose(
+            "n8n,n8n-mcp", api_key="forged-api-key"
+        )
+        n8n_healthcheck = config["services"]["n8n"].get("healthcheck")
+        mcp_depends_on = config["services"]["n8n-mcp"].get("depends_on", {})
+
+        self.assertIsNotNone(n8n_healthcheck)
+        self.assertEqual(
+            mcp_depends_on.get("n8n", {}).get("condition"),
+            "service_healthy",
+        )
+
+    def test_mcp_override_retains_image_command_and_original_entrypoint(self):
+        config = self.render_compose("n8n-mcp", api_key="forged-api-key")
+        service = config["services"]["n8n-mcp"]
+
+        self.assertEqual(
+            service.get("entrypoint"),
+            ["node", "/usr/local/bin/n8n_mcp_entrypoint.js"],
+        )
+        self.assertIsNone(service.get("command"))
+
+    def test_mcp_entrypoint_gates_original_command_on_authoritative_api(self):
+        entrypoint = REPOSITORY_ROOT / "scripts" / "n8n_mcp_entrypoint.js"
+
+        self.assertTrue(entrypoint.is_file())
+        source = entrypoint.read_text(encoding="utf-8")
+        self.assertIn("N8N_API_KEY", source)
+        self.assertIn("N8N_API_URL", source)
+        self.assertIn("X-N8N-API-KEY", source)
+        self.assertIn("spawn(originalEntrypoint, process.argv.slice(2)", source)
+        self.assertIn("result.statusCode >= 200 && result.statusCode < 300", source)
+        self.assertIn("result.statusCode === 401", source)
+
+    def test_mcp_entrypoint_does_not_put_secrets_in_process_arguments(self):
+        compose_source = (REPOSITORY_ROOT / "docker-compose.yml").read_text(
+            encoding="utf-8"
+        )
+        entrypoint = (
+            REPOSITORY_ROOT / "scripts" / "n8n_mcp_entrypoint.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("n8n_mcp_entrypoint.js", compose_source)
+        self.assertNotRegex(
+            compose_source,
+            r"(?:command|entrypoint):[^\n]*N8N_API_KEY",
+        )
+        self.assertNotIn("process.env.N8N_API_KEY", entrypoint.split("spawn(", 1)[-1])
+        self.assertNotIn("N8N_API_KEY", entrypoint.split("spawn(", 1)[-1])
+
+    def test_mcp_entrypoint_fails_closed_before_original_command_for_missing_key(self):
+        source = (
+            REPOSITORY_ROOT / "scripts" / "n8n_mcp_entrypoint.js"
+        ).read_text(encoding="utf-8")
+        missing_key_guard = source.index("N8N_API_KEY")
+        original_command = source.index("spawn(originalEntrypoint, process.argv.slice(2)")
+
+        self.assertLess(missing_key_guard, original_command)
+        self.assertIn("process.exitCode = 1", source)
+
+    def test_mcp_entrypoint_retries_only_readiness_and_rejects_forged_key(self):
+        source = (
+            REPOSITORY_ROOT / "scripts" / "n8n_mcp_entrypoint.js"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("READINESS_ATTEMPTS", source)
+        self.assertIn("setTimeout", source)
+        self.assertIn("networkError", source)
+        self.assertIn("authoritative", source.lower())
+
+    def run_mcp_entrypoint(self, api_key, response_statuses, marker_path):
+        observations = {"requests": 0, "api_keys": []}
+
+        class ApiHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                observations["requests"] += 1
+                observations["api_keys"].append(self.headers.get("X-N8N-API-KEY"))
+                self.send_response(response_statuses[min(
+                    observations["requests"] - 1, len(response_statuses) - 1
+                )])
+                self.end_headers()
+
+            def log_message(self, *_args):
+                return
+
+        server = HTTPServer(("127.0.0.1", 0), ApiHandler)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
+        server_thread.start()
+        try:
+            command = [
+                node_executable(),
+                str(REPOSITORY_ROOT / "scripts" / "n8n_mcp_entrypoint.js"),
+                "-e",
+                "require('fs').writeFileSync(process.env.MCP_TEST_MARKER, 'started')",
+            ]
+            environment = os.environ.copy()
+            environment.update(
+                {
+                    "N8N_API_URL": f"http://127.0.0.1:{server.server_port}",
+                    "MCP_TEST_MARKER": str(marker_path),
+                    "N8N_MCP_READINESS_DELAY_MS": "1",
+                    "N8N_MCP_ORIGINAL_ENTRYPOINT": node_executable(),
+                }
+            )
+            if api_key is None:
+                environment.pop("N8N_API_KEY", None)
+            else:
+                environment["N8N_API_KEY"] = api_key
+            return subprocess.run(
+                command,
+                cwd=REPOSITORY_ROOT,
+                check=False,
+                capture_output=True,
+                text=True,
+                env=environment,
+            ), observations
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=2)
+
+    def test_mcp_entrypoint_missing_key_never_starts_original_command(self):
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marker_path = Path(temporary_directory) / "started"
+            result, observations = self.run_mcp_entrypoint(
+                None, [200], marker_path
+            )
+            self.assertFalse(marker_path.exists())
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(observations["requests"], 0)
+        self.assertNotIn("started", result.stdout + result.stderr)
+
+    def test_mcp_entrypoint_forged_key_never_starts_original_command(self):
+        forged_key = "forged-public-api-jwt"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marker_path = Path(temporary_directory) / "started"
+            result, observations = self.run_mcp_entrypoint(
+                forged_key, [401], marker_path
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(marker_path.exists())
+        self.assertEqual(observations["requests"], 1)
+        self.assertEqual(observations["api_keys"], [forged_key])
+        self.assertNotIn(forged_key, result.stdout + result.stderr)
+
+    def test_mcp_entrypoint_starts_original_command_only_after_authoritative_acceptance(self):
+        accepted_key = "n8n-issued-public-api-jwt"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marker_path = Path(temporary_directory) / "started"
+            result, observations = self.run_mcp_entrypoint(
+                accepted_key, [200], marker_path
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(marker_path.exists())
+            self.assertEqual(observations["requests"], 1)
+            self.assertEqual(observations["api_keys"], [accepted_key])
+            self.assertNotIn(accepted_key, result.stdout + result.stderr)
+
+    def test_mcp_entrypoint_waits_for_n8n_readiness_before_starting_original_command(self):
+        accepted_key = "n8n-issued-public-api-jwt"
+        with tempfile.TemporaryDirectory() as temporary_directory:
+            marker_path = Path(temporary_directory) / "started"
+            result, observations = self.run_mcp_entrypoint(
+                accepted_key, [503, 200], marker_path
+            )
+
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertTrue(marker_path.exists())
+            self.assertGreaterEqual(observations["requests"], 2)
 
     def run_compose_healthcheck(self, config, api_key, status):
         healthcheck = config["services"]["n8n-mcp"]["healthcheck"]["test"]

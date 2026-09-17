@@ -244,7 +244,7 @@ services:
   n8n-import:
     <<: *service-n8n
     container_name: n8n-import
-    profiles: ["n8n"]
+    profiles: ["n8n", "n8n-mcp"]
     environment:
       <<: *service-n8n-env
       RUN_N8N_IMPORT: ${RUN_N8N_IMPORT:-false}
@@ -260,7 +260,7 @@ services:
   n8n:
     <<: *service-n8n
     container_name: n8n
-    profiles: ["n8n"]
+    profiles: ["n8n", "n8n-mcp"]
     restart: unless-stopped
     environment:
       <<: *service-n8n-env
@@ -275,6 +275,12 @@ services:
     depends_on:
       n8n-import:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   n8n-worker:
     <<: *service-n8n
@@ -2835,6 +2841,7 @@ services:
     container_name: n8n-mcp
     profiles: ["n8n-mcp"]
     restart: unless-stopped
+    entrypoint: ["node", "/usr/local/bin/n8n_mcp_entrypoint.js"]
     environment:
       # N8N_MCP_TOKEN authenticates inbound MCP clients; N8N_API_KEY below is
       # a separate n8n-issued public API JWT supplied by the operator.
@@ -2848,18 +2855,12 @@ services:
       - PORT=3000
     volumes:
       - n8n-mcp-data:/app/data
+      - ./scripts/n8n_mcp_entrypoint.js:/usr/local/bin/n8n_mcp_entrypoint.js:ro
+    depends_on:
+      n8n:
+        condition: service_healthy
     healthcheck:
-      test:
-        - CMD-SHELL
-        - >-
-          test -n "$$N8N_API_KEY" &&
-          curl --silent --fail --output /dev/null --connect-timeout 5 --max-time 10
-          http://localhost:3000/health &&
-          status="$$(curl --silent --output /dev/null --write-out '%{http_code}'
-          --connect-timeout 5 --max-time 10
-          --header "X-N8N-API-KEY: $$N8N_API_KEY"
-          "$$N8N_API_URL/api/v1/workflows?limit=1")" &&
-          case "$$status" in 2??) exit 0 ;; *) exit 1 ;; esac
+      test: ["CMD-SHELL", "curl --silent --fail --output /dev/null http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

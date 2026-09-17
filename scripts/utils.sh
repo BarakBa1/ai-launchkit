@@ -127,8 +127,8 @@ require_n8n_mcp_api_key() {
 # before launch. Only the HTTP status is captured or reported.
 require_n8n_mcp_api_key_live() {
     local profiles="${1:-}"
-    local key="${2:-}"
-    local n8n_url="${3:-}"
+    local n8n_url="${2:-}"
+    local key="${N8N_API_KEY:-}"
     local n8n_url_host=""
     local api_url=""
     local api_status=""
@@ -150,13 +150,16 @@ require_n8n_mcp_api_key_live() {
     fi
 
     api_url="${n8n_url%/}/api/v1/workflows?limit=1"
-    api_status=$(curl \
+    # Feed the header through stdin so the key never appears in curl's
+    # process arguments. curl still reads the value from the environment-backed
+    # shell variable, and only its status code is captured.
+    api_status=$(printf '%s\n' "X-N8N-API-KEY: $key" | curl \
         --silent \
         --output /dev/null \
         --write-out '%{http_code}' \
         --connect-timeout 5 \
         --max-time 10 \
-        --header "X-N8N-API-KEY: $key" \
+        --header @- \
         "$api_url" 2>/dev/null) || {
         log_error "N8N_API_KEY live validation failed due to an n8n API network error."
         return 1

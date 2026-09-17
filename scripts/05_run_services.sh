@@ -17,11 +17,14 @@ if [ ! -f "docker-compose.yml" ]; then
   exit 1
 fi
 
-# Validate the optional n8n-mcp credential contract before any service launch.
+# Validate only the cheap optional n8n-mcp credential shape before any service
+# launch. The authoritative API check belongs inside the n8n-mcp container,
+# after Compose has started n8n and observed its healthy state; probing here
+# would deadlock clean installs whose n8n API is not up yet.
 # N8N_MCP_TOKEN remains the inbound MCP token; N8N_API_KEY must be an
 # externally issued n8n public API JWT when n8n-mcp is selected.
 source .env
-if ! require_n8n_mcp_api_key_live "${COMPOSE_PROFILES:-}" "${N8N_API_KEY:-}" "${N8N_URL:-}"; then
+if ! require_n8n_mcp_api_key "${COMPOSE_PROFILES:-}" "${N8N_API_KEY:-}"; then
   exit 1
 fi
 
