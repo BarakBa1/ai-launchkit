@@ -142,8 +142,10 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         class FakeSocket:
             def __init__(self, payload):
                 self.payload = payload
+                self.recv_calls = []
 
             def recv(self, size):
+                self.recv_calls.append(size)
                 chunk, self.payload = self.payload[:size], self.payload[size:]
                 return chunk
 
@@ -151,6 +153,46 @@ class N8nQueueWatchdogTests(unittest.TestCase):
             FakeSocket(b"*2\r\n$4\r\nPONG\r\n:1\r\n")
         )
         self.assertEqual(response, ["PONG", 1])
+
+    def test_redis_response_parser_rejects_unbounded_lengths_before_reading_body(self):
+        class FakeSocket:
+            def __init__(self, payload):
+                self.payload = payload
+                self.recv_calls = []
+
+            def recv(self, size):
+                self.recv_calls.append(size)
+                chunk, self.payload = self.payload[:size], self.payload[size:]
+                return chunk
+
+        socket = FakeSocket(b"$999999999\r\n")
+        with self.assertRaises(RuntimeError):
+            _redis_read_response(socket, max_bulk_bytes=4)
+        self.assertEqual(socket.payload, b"")
+        self.assertNotIn(999999999, socket.recv_calls)
+
+        with self.assertRaises(RuntimeError):
+            _redis_read_response(FakeSocket(b"*999999999\r\n"), max_array_items=4)
+
+    def test_redis_response_parser_rejects_nesting_and_total_budget_limits(self):
+        class FakeSocket:
+            def __init__(self, payload):
+                self.payload = payload
+
+            def recv(self, size):
+                chunk, self.payload = self.payload[:size], self.payload[size:]
+                return chunk
+
+        nested = b"*1\r\n*1\r\n$1\r\na\r\n"
+        with self.assertRaises(RuntimeError):
+            _redis_read_response(FakeSocket(nested), max_nesting=1)
+
+        with self.assertRaises(RuntimeError):
+            _redis_read_response(FakeSocket(b"$4\r\nPONG\r\n"), max_response_bytes=8)
+
+        for option in ("max_bulk_bytes", "max_array_items", "max_nesting", "max_response_bytes"):
+            with self.subTest(option=option), self.assertRaises(ValueError):
+                _redis_read_response(FakeSocket(b"+OK\r\n"), **{option: 0})
 
     def test_missing_api_configuration_is_an_unhealthy_collection(self):
         for config in (
@@ -200,8 +242,109 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         metrics = collector.collect(force=True)
 
         self.assertIn('n8n_queue_failure_unnotified{workflow_id="jarvis-id",workflow_name="jarvis"} 1', metrics)
+        self.assertIn("n8n_watchdog_notification_correlation_configured 0", metrics)
         self.assertIn("n8n_watchdog_notification_correlation_up 0", metrics)
         self.assertIn("n8n_watchdog_notification_correlation_failures_total 1", metrics)
+
+    def test_missing_handler_or_slack_id_is_unknown_and_never_complete(self):
+        now = time()
+        source = {
+            "id": "921111",
+            "workflowId": "jarvis-id",
+            "workflowName": "jarvis",
+            "status": "error",
+            "startedAt": None,
+            "stoppedAt": now - 120,
+            "error": {"message": "timeout exceeded when trying to connect"},
+        }
+
+        class FakeApi:
+            configured = True
+
+            def list_executions(self, workflow_id="", limit=100, **_kwargs):
+                return [source]
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        for error_workflow_id, slack_workflow_id in (("", "slack-id"), ("", "")):
+            with self.subTest(error_workflow_id=error_workflow_id, slack_workflow_id=slack_workflow_id):
+                collector = WatchdogCollector(
+                    WatchdogConfig(
+                        n8n_api_url="https://n8n.example/api/v1",
+                        n8n_api_key="test-only",
+                        error_workflow_id=error_workflow_id,
+                        slack_workflow_id=slack_workflow_id,
+                        notification_grace_seconds=1,
+                        scrape_cache_seconds=0,
+                    ),
+                    api_client=FakeApi(),
+                )
+                collector.redis = FakeRedis()
+                metrics = collector.collect(force=True)
+                self.assertIn("n8n_watchdog_notification_correlation_configured 0", metrics)
+                self.assertIn("n8n_watchdog_notification_correlation_attempted 1", metrics)
+                self.assertIn("n8n_watchdog_notification_correlation_up 0", metrics)
+                self.assertIn("n8n_watchdog_notification_correlation_failures_total 1", metrics)
+                self.assertIn('n8n_queue_failure_unnotified{workflow_id="jarvis-id",workflow_name="jarvis"} 1', metrics)
+
+    def test_both_notification_workflows_are_required_for_a_successful_correlation(self):
+        now = time()
+        source = {
+            "id": "921111",
+            "workflowId": "jarvis-id",
+            "workflowName": "jarvis",
+            "status": "error",
+            "startedAt": None,
+            "stoppedAt": now - 120,
+            "error": {"message": "timeout exceeded when trying to connect"},
+        }
+        handler = {
+            "id": "handler-execution",
+            "status": "success",
+            "finished": True,
+            "data": {"resultData": {"runData": {"notify": [{"json": {"executionId": "921111"}}]}}},
+        }
+        slack = {
+            "id": "slack-execution",
+            "status": "success",
+            "finished": True,
+            "data": {"resultData": {"runData": {"send": [{"json": {"executionId": "921111"}}]}}},
+        }
+
+        class FakeApi:
+            configured = True
+
+            def list_recent_executions(self, workflow_id="", **_kwargs):
+                return ExecutionPage(
+                    [source] if not workflow_id else [handler if workflow_id == "error-id" else slack],
+                    "",
+                )
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        collector = WatchdogCollector(
+            WatchdogConfig(
+                n8n_api_url="https://n8n.example/api/v1",
+                n8n_api_key="test-only",
+                error_workflow_id="error-id",
+                slack_workflow_id="slack-id",
+                notification_grace_seconds=1,
+                scrape_cache_seconds=0,
+            ),
+            api_client=FakeApi(),
+        )
+        collector.redis = FakeRedis()
+
+        metrics = collector.collect(force=True)
+
+        self.assertIn("n8n_watchdog_notification_correlation_configured 1", metrics)
+        self.assertIn("n8n_watchdog_notification_correlation_attempted 1", metrics)
+        self.assertIn("n8n_watchdog_notification_correlation_up 1", metrics)
+        self.assertNotIn('n8n_queue_failure_unnotified{workflow_id="jarvis-id",workflow_name="jarvis"} 1', metrics)
 
     def test_api_requires_https_for_api_key_transport(self):
         self.assertFalse(N8nApiClient("http://n8n.example/api/v1", "secret", 1).configured)
@@ -293,13 +436,14 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         page = client.list_recent_executions(limit=1, since=now - 60)
 
         self.assertEqual([row["id"] for row in page.rows], ["new", "old"])
-        self.assertEqual(page.next_cursor, "")
-        self.assertIn("cursor=opaque", opener.requests[1][0].full_url)
+        self.assertEqual(page.next_last_id, "")
+        self.assertIn("lastId=new", opener.requests[1][0].full_url)
+        self.assertNotIn("cursor=", opener.requests[1][0].full_url)
 
         capped_opener = FakeOpener()
         capped_client = N8nApiClient("https://n8n.example/api/v1", "secret", 1, opener=capped_opener)
         capped = capped_client.list_recent_executions(limit=1, max_pages=1, since=now - 60)
-        self.assertEqual(capped.next_cursor, "unknown")
+        self.assertEqual(capped.next_last_id, "unknown")
 
     def test_incomplete_notification_pagination_is_exposed_as_unknown(self):
         now = time()
@@ -312,13 +456,25 @@ class N8nQueueWatchdogTests(unittest.TestCase):
             "stoppedAt": now - 120,
             "error": {"message": "timeout exceeded when trying to connect"},
         }
+        successful_handler = {
+            "status": "success",
+            "finished": True,
+            "data": {"resultData": {"runData": {"notify": [{"json": {"executionId": "921111"}}]}}},
+        }
+        successful_slack = {
+            "status": "success",
+            "finished": True,
+            "data": {"resultData": {"runData": {"send": [{"json": {"executionId": "921111"}}]}}},
+        }
 
         class FakeApi:
             configured = True
 
             def list_recent_executions(self, workflow_id="", **_kwargs):
                 if workflow_id == "error-id":
-                    return ExecutionPage([], "unknown")
+                    return ExecutionPage([successful_handler], "unknown")
+                if workflow_id == "slack-id":
+                    return ExecutionPage([successful_slack], "")
                 return ExecutionPage([source], "")
 
         class FakeRedis:
@@ -329,6 +485,7 @@ class N8nQueueWatchdogTests(unittest.TestCase):
             n8n_api_url="https://n8n.example/api/v1",
             n8n_api_key="test-only",
             error_workflow_id="error-id",
+            slack_workflow_id="slack-id",
             notification_grace_seconds=1,
             scrape_cache_seconds=0,
         )
@@ -399,6 +556,84 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         self.assertIn('n8n_queue_failure_events_total{workflow_id="main-id",workflow_name="main"} 1', metrics)
         self.assertEqual(collector.api.detail_ids, ["921041"])
 
+    def test_ambiguous_error_without_id_marks_collection_incomplete(self):
+        class FakeApi:
+            configured = True
+
+            def list_recent_executions(self, **_kwargs):
+                return ExecutionPage([{"status": "error", "startedAt": time() - 120}], "")
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        collector = WatchdogCollector(
+            WatchdogConfig(
+                n8n_api_url="https://n8n.example/api/v1",
+                n8n_api_key="test-only",
+                scrape_cache_seconds=0,
+            ),
+            api_client=FakeApi(),
+        )
+        collector.redis = FakeRedis()
+
+        metrics = collector.collect(force=True)
+
+        self.assertIn("n8n_watchdog_collection_success 0", metrics)
+        self.assertIn("n8n_watchdog_execution_detail_failures_total 1", metrics)
+
+    def test_started_error_without_inline_error_is_confirmed_with_detail_read(self):
+        now = time()
+        metadata = {
+            "id": "921041",
+            "workflowId": "main-id",
+            "workflowName": "main",
+            "status": "error",
+            "startedAt": now - 120,
+            "stoppedAt": now - 120,
+        }
+        detail = {
+            **metadata,
+            "data": {
+                "resultData": {
+                    "runData": {},
+                    "error": {"message": "timeout exceeded when trying to connect"},
+                }
+            },
+        }
+
+        class FakeApi:
+            configured = True
+
+            def __init__(self):
+                self.detail_ids = []
+
+            def list_recent_executions(self, **_kwargs):
+                return ExecutionPage([metadata], "")
+
+            def get_execution(self, execution_id):
+                self.detail_ids.append(execution_id)
+                return detail
+
+        class FakeRedis:
+            def collect(self):
+                return True, {}
+
+        collector = WatchdogCollector(
+            WatchdogConfig(
+                n8n_api_url="https://n8n.example/api/v1",
+                n8n_api_key="test-only",
+                scrape_cache_seconds=0,
+            ),
+            api_client=FakeApi(),
+        )
+        collector.redis = FakeRedis()
+
+        metrics = collector.collect(force=True)
+
+        self.assertIn('n8n_queue_failure_events_total{workflow_id="main-id",workflow_name="main"} 1', metrics)
+        self.assertEqual(collector.api.detail_ids, ["921041"])
+
     def test_prometheus_target_has_an_atomic_compose_watchdog_service(self):
         compose = (self.ROOT / "docker-compose.yml").read_text(encoding="utf-8")
         prometheus = (self.ROOT / "prometheus" / "prometheus.yml").read_text(encoding="utf-8")
@@ -457,7 +692,9 @@ class N8nQueueWatchdogTests(unittest.TestCase):
         self.assertIn('n8n_queue_failure_events_total{workflow_id="jarvis-id",workflow_name="jarvis"} 1', first)
         self.assertIn('n8n_queue_failure_unnotified{workflow_id="jarvis-id",workflow_name="jarvis"} 1', first)
         self.assertIn('n8n_queue_failure_events_total{workflow_id="jarvis-id",workflow_name="jarvis"} 1', second)
-        self.assertEqual(fake_api.calls.count("error-id"), 2)
+        # A lone handler ID is an invalid correlation configuration; do not
+        # query a partial path and accidentally treat it as complete.
+        self.assertEqual(fake_api.calls.count("error-id"), 0)
 
 
 if __name__ == "__main__":

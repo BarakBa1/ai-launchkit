@@ -49,7 +49,7 @@ groups:
           component: n8n-queue-watchdog
         annotations:
           summary: n8n queue notification correlation is incomplete
-          description: The configured error or Slack workflow listing failed or did not reach its time boundary; unnotified failures remain alertable.
+          description: Notification correlation failed, reached its time boundary, or lacks either required workflow ID; unnotified failures remain alertable.
 
       - alert: N8nQueueFailureUnnotified
         expr: n8n_queue_failure_unnotified > 0

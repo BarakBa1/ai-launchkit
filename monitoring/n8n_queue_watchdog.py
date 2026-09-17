@@ -33,6 +33,11 @@ QUEUE_FAILURE_RE = re.compile(
 )
 QUEUE_KEY_RE = re.compile(r"^bull:(?P<queue>.+):(?P<state>wait|active|failed|delayed|stalled)$")
 METRICS_CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
+REDIS_MAX_LINE_BYTES = 1_048_576
+REDIS_MAX_BULK_BYTES = 1_048_576
+REDIS_MAX_ARRAY_ITEMS = 10_000
+REDIS_MAX_NESTING = 32
+REDIS_MAX_RESPONSE_BYTES = 5_000_000
 
 
 def _bounded_int(value: str, default: int, minimum: int, maximum: int) -> int:
@@ -336,7 +341,11 @@ def _secure_api_url(url: str) -> bool:
 @dataclass(frozen=True)
 class ExecutionPage:
     rows: List[Mapping[str, Any]]
-    next_cursor: str = ""
+    # The n8n 1.* executions endpoint returns an opaque ``nextCursor`` but
+    # accepts the last execution ID as ``lastId`` on the next request. Keep
+    # only the request-side continuation value so the watchdog cannot send a
+    # cursor token to an endpoint that does not accept it.
+    next_last_id: str = ""
 
 
 class N8nApiClient:
@@ -374,15 +383,15 @@ class N8nApiClient:
         workflow_id: str = "",
         limit: int = 100,
         include_data: bool = False,
-        cursor: str = "",
+        last_id: str = "",
         status: str = "",
     ) -> ExecutionPage:
         limit = max(1, min(250, int(limit)))
         params: Dict[str, Any] = {"limit": limit, "includeData": "true" if include_data else "false"}
         if workflow_id:
             params["workflowId"] = workflow_id
-        if cursor:
-            params["cursor"] = cursor
+        if last_id:
+            params["lastId"] = last_id
         if status:
             params["status"] = status
         payload = self._get("executions", params)
@@ -392,8 +401,18 @@ class N8nApiClient:
             rows = _as_mapping(payload).get("data")
             if not isinstance(rows, list):
                 raise ValueError("n8n execution response did not contain a data list")
-        next_cursor = "" if isinstance(payload, list) else str(_as_mapping(payload).get("nextCursor") or "")
-        return ExecutionPage([row for row in rows if isinstance(row, Mapping)], next_cursor)
+        normalized_rows = [row for row in rows if isinstance(row, Mapping)]
+        next_cursor = "" if isinstance(payload, list) else _as_mapping(payload).get("nextCursor")
+        if next_cursor in (None, ""):
+            next_last_id = ""
+        elif not normalized_rows or not normalized_rows[-1].get("id"):
+            raise ValueError("n8n execution page advertised nextCursor without a row ID")
+        else:
+            # n8n 1.123.27 encodes lastId/limit/count in nextCursor, while
+            # the handler reads lastId. The last row is the authoritative ID
+            # boundary and avoids depending on the token's private encoding.
+            next_last_id = str(normalized_rows[-1]["id"])
+        return ExecutionPage(normalized_rows, next_last_id)
 
     def list_recent_executions(
         self,
@@ -405,10 +424,10 @@ class N8nApiClient:
         status: str = "",
     ) -> ExecutionPage:
         rows: List[Mapping[str, Any]] = []
-        cursor = ""
+        last_id = ""
         complete = True
         for _page_number in range(max_pages):
-            page = self.list_execution_page(workflow_id, limit, include_data, cursor, status)
+            page = self.list_execution_page(workflow_id, limit, include_data, last_id, status)
             rows.extend(page.rows)
             if since is not None and page.rows:
                 oldest = min(
@@ -417,11 +436,11 @@ class N8nApiClient:
                 )
                 if oldest < since:
                     break
-            if not page.next_cursor:
+            if not page.next_last_id:
                 if len(page.rows) >= limit:
                     complete = False
                 break
-            cursor = page.next_cursor
+            last_id = page.next_last_id
         else:
             complete = False
         return ExecutionPage(rows, "" if complete else "unknown")
@@ -454,45 +473,114 @@ def _redis_encode(parts: Sequence[str]) -> bytes:
     )
 
 
-def _redis_read_line(sock: socket.socket) -> bytes:
+@dataclass
+class _RedisResponseBudget:
+    remaining: int
+
+    def consume(self, amount: int) -> None:
+        if amount < 0 or amount > self.remaining:
+            raise RuntimeError("Redis response exceeded total byte limit")
+        self.remaining -= amount
+
+
+def _redis_read_line(
+    sock: socket.socket,
+    budget: _RedisResponseBudget,
+    max_line_bytes: int,
+) -> bytes:
     data = bytearray()
     while True:
         byte = sock.recv(1)
         if not byte:
             raise RuntimeError("Redis closed the connection")
+        if len(data) + len(byte) > max_line_bytes:
+            raise RuntimeError("Redis response line exceeded limit")
+        budget.consume(len(byte))
         data.extend(byte)
         if data.endswith(b"\r\n"):
             return bytes(data[:-2])
-        if len(data) > 1024 * 1024:
-            raise RuntimeError("Redis response line exceeded limit")
 
 
-def _redis_read_response(sock: socket.socket) -> Any:
-    prefix = sock.recv(1)
-    if not prefix:
-        raise RuntimeError("Redis closed the connection")
+def _redis_read_exact(sock: socket.socket, size: int, budget: _RedisResponseBudget) -> bytes:
+    if size < 0:
+        raise RuntimeError("Redis response requested a negative read")
+    # Check the shared budget before allocating or reading the declared size.
+    budget.consume(size)
+    data = bytearray(size)
+    offset = 0
+    while offset < size:
+        chunk = sock.recv(size - offset)
+        if not chunk:
+            raise RuntimeError("Redis returned a truncated bulk value")
+        if len(chunk) > size - offset:
+            raise RuntimeError("Redis returned more bytes than requested")
+        data[offset : offset + len(chunk)] = chunk
+        offset += len(chunk)
+    return bytes(data)
+
+
+def _redis_int(line: bytes) -> int:
+    try:
+        return int(line)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Redis returned an invalid integer") from exc
+
+
+def _redis_read_response(
+    sock: socket.socket,
+    *,
+    max_bulk_bytes: int = REDIS_MAX_BULK_BYTES,
+    max_array_items: int = REDIS_MAX_ARRAY_ITEMS,
+    max_nesting: int = REDIS_MAX_NESTING,
+    max_response_bytes: int = REDIS_MAX_RESPONSE_BYTES,
+    _budget: Optional[_RedisResponseBudget] = None,
+    _depth: int = 0,
+) -> Any:
+    limits = (max_bulk_bytes, max_array_items, max_nesting, max_response_bytes)
+    if any(not isinstance(value, int) or isinstance(value, bool) or value <= 0 for value in limits):
+        raise ValueError("Redis response limits must be positive integers")
+    budget = _budget or _RedisResponseBudget(max_response_bytes)
+    prefix = _redis_read_exact(sock, 1, budget)
     if prefix == b"+":
-        return _redis_read_line(sock).decode("utf-8", "replace")
+        return _redis_read_line(sock, budget, REDIS_MAX_LINE_BYTES).decode("utf-8", "replace")
     if prefix == b"-":
-        raise RuntimeError(_redis_read_line(sock).decode("utf-8", "replace"))
+        raise RuntimeError(_redis_read_line(sock, budget, REDIS_MAX_LINE_BYTES).decode("utf-8", "replace"))
     if prefix == b":":
-        return int(_redis_read_line(sock))
+        return _redis_int(_redis_read_line(sock, budget, REDIS_MAX_LINE_BYTES))
     if prefix == b"$":
-        size = int(_redis_read_line(sock))
+        size = _redis_int(_redis_read_line(sock, budget, REDIS_MAX_LINE_BYTES))
         if size < 0:
+            if size != -1:
+                raise RuntimeError("Redis returned an invalid bulk length")
             return None
-        data = bytearray()
-        while len(data) < size + 2:
-            chunk = sock.recv(size + 2 - len(data))
-            if not chunk:
-                raise RuntimeError("Redis returned a truncated bulk value")
-            data.extend(chunk)
-        return bytes(data[:size]).decode("utf-8", "replace")
+        if size > max_bulk_bytes:
+            raise RuntimeError("Redis bulk value exceeded limit")
+        data = _redis_read_exact(sock, size + 2, budget)
+        if data[-2:] != b"\r\n":
+            raise RuntimeError("Redis bulk value was not CRLF terminated")
+        return data[:size].decode("utf-8", "replace")
     if prefix == b"*":
-        count = int(_redis_read_line(sock))
+        count = _redis_int(_redis_read_line(sock, budget, REDIS_MAX_LINE_BYTES))
         if count < 0:
+            if count != -1:
+                raise RuntimeError("Redis returned an invalid array length")
             return None
-        return [_redis_read_response(sock) for _ in range(count)]
+        if count > max_array_items:
+            raise RuntimeError("Redis array exceeded item limit")
+        if _depth >= max_nesting:
+            raise RuntimeError("Redis response nesting exceeded limit")
+        return [
+            _redis_read_response(
+                sock,
+                max_bulk_bytes=max_bulk_bytes,
+                max_array_items=max_array_items,
+                max_nesting=max_nesting,
+                max_response_bytes=max_response_bytes,
+                _budget=budget,
+                _depth=_depth + 1,
+            )
+            for _ in range(count)
+        ]
     raise RuntimeError("Redis returned an unknown response type")
 
 
@@ -668,17 +756,27 @@ class WatchdogCollector:
         else:
             page_rows = page.rows
         for row in page_rows:
-            # Public API v1 metadata omits execution.data and often omits the
-            # error text. The source query is status=error, so a missing
-            # startedAt is enough to select a bounded detail read for the
-            # queue-level boundary; the detail read supplies the signature.
-            if not has_queue_failure_signature(row) and row.get("startedAt") not in (None, ""):
-                continue
             if is_queue_failure(row):
                 rows.append(row)
                 continue
+            # Public API v1 metadata omits execution.data and may omit the
+            # error text. Never discard a status=error row merely because it
+            # has startedAt: the detail payload may be the only place where a
+            # zero-node Bull timeout is visible. A row is safe to skip only
+            # when inline metadata already proves it ran at least one node
+            # and includes an error payload we can classify.
+            node_count = executed_node_count(row)
+            if (
+                row.get("startedAt") not in (None, "")
+                and node_count is not None
+                and node_count > 0
+                and bool(execution_error_text(row))
+            ):
+                continue
             execution_id = str(row.get("id") or "")
             if not execution_id:
+                self.execution_detail_failures_last_cycle += 1
+                self.execution_detail_failures_total += 1
                 continue
             try:
                 detail = self.api.get_execution(execution_id)
@@ -691,7 +789,7 @@ class WatchdogCollector:
             expanded.update(detail)
             if is_queue_failure(expanded):
                 rows.append(expanded)
-        complete = not page.next_cursor and self.execution_detail_failures_last_cycle == 0
+        complete = not page.next_last_id and self.execution_detail_failures_last_cycle == 0
         return True, rows, complete
 
     def _notification_rows(
@@ -700,23 +798,25 @@ class WatchdogCollector:
     ) -> Optional[NotificationRows]:
         """Read each notification workflow once per scrape, not once per failure."""
 
-        if not self.config.error_workflow_id:
-            return None
         self.notification_correlation_attempted = True
+        if not (self.config.error_workflow_id and self.config.slack_workflow_id):
+            # Handler and Slack workflow IDs are a pair. Treat either missing
+            # value as an explicit unknown/unhealthy dependency; callers must
+            # retain the core unnotified failure signal.
+            self.notification_correlation_up = False
+            return None
         try:
             handler_page = self._list_recent_executions(
                 self.config.error_workflow_id,
                 include_data=True,
                 since=now - self.config.source_lookback_seconds,
             )
-            slack_page = ExecutionPage([], "")
-            if self.config.slack_workflow_id:
-                slack_page = self._list_recent_executions(
-                    self.config.slack_workflow_id,
-                    include_data=True,
-                    since=now - self.config.source_lookback_seconds,
-                )
-            complete = not handler_page.next_cursor and not slack_page.next_cursor
+            slack_page = self._list_recent_executions(
+                self.config.slack_workflow_id,
+                include_data=True,
+                since=now - self.config.source_lookback_seconds,
+            )
+            complete = not handler_page.next_last_id and not slack_page.next_last_id
             self.notification_correlation_up = complete
             if not complete:
                 self.notification_correlation_failures_total += 1
@@ -732,9 +832,9 @@ class WatchdogCollector:
         source_id: str,
         notification_rows: Optional[NotificationRows],
     ) -> Optional[bool]:
-        if not self.config.error_workflow_id:
-            return None
-        if notification_rows is None:
+        if not (self.config.error_workflow_id and self.config.slack_workflow_id):
+            return False
+        if notification_rows is None or not notification_rows.complete:
             return False
         handler_rows, slack_rows = notification_rows.handler, notification_rows.slack
         handler_ok = any(_successful(row) and handler_references_execution(row, source_id) for row in handler_rows)
@@ -765,6 +865,9 @@ class WatchdogCollector:
 
             self.notification_correlation_attempted = False
             self.notification_correlation_up = False
+            if not (self.config.error_workflow_id and self.config.slack_workflow_id):
+                self.notification_correlation_attempted = True
+                self.notification_correlation_failures_total += 1
             api_up, executions, self.execution_coverage_complete = self._source_executions(now)
             for execution in executions:
                 if not is_queue_failure(execution):
@@ -832,8 +935,13 @@ class WatchdogCollector:
             lines += _metric_block(
                 "n8n_watchdog_notification_correlation_configured",
                 "gauge",
-                "Whether an n8n error workflow ID is configured for notification correlation.",
-                [metric_line("n8n_watchdog_notification_correlation_configured", int(bool(self.config.error_workflow_id)))],
+                "Whether both the n8n error-handler and Slack workflow IDs are configured for correlation.",
+                [
+                    metric_line(
+                        "n8n_watchdog_notification_correlation_configured",
+                        int(bool(self.config.error_workflow_id and self.config.slack_workflow_id)),
+                    )
+                ],
             )
             lines += _metric_block(
                 "n8n_watchdog_notification_correlation_attempted",

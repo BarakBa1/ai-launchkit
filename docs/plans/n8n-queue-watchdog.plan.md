@@ -25,8 +25,8 @@ does not add credentials, database writes, or deployment actions.
 
 - Queue failures require an error status, Bull timeout signature, and either a
   missing start timestamp or zero executed nodes.
-- Handler correlation is optional and never reports a missing notification when
-  required IDs are not configured.
+- Handler/Slack correlation requires both workflow IDs. A missing ID is
+  explicitly unknown/unhealthy and never completes the notification path.
 - Redis, PostgreSQL, n8n API, and worker probes fail closed without leaking
   credentials.
 - Metrics are bounded by configured workflow labels and rules are compatible

@@ -4,7 +4,7 @@
 queue failures. It runs outside n8n's execution queue so a worker outage does
 not also disable the collector. The process reads recent n8n executions,
 classifies only error records with a Bull timeout signature and a zero-node or
-missing-start boundary, and optionally correlates source IDs with successful
+missing-start boundary, and can correlate source IDs with successful
 `errorWorkflow` and Slack child executions.
 
 It does not write n8n, Redis, PostgreSQL, broker keys, or Docker state. Redis
@@ -22,8 +22,10 @@ an unhealthy collection (`n8n_watchdog_collection_success=0`), so it is
 alertable rather than treated as a successful empty scan.
 Set `N8N_WATCHDOG_WORKFLOW_IDS` to a comma-separated allowlist to bound metric
 labels. Set both workflow IDs for notification-missing alerts; if the handler
-or Slack ID is absent, the collector deliberately reports correlation as
-unknown rather than raising a false missing-notification alert.
+or Slack ID is absent, the configuration is explicitly unhealthy/unknown and
+the retained failure remains unnotified; a partial pair is never treated as a
+complete notification path. The correlation rule therefore requires both
+`N8N_WATCHDOG_ERROR_WORKFLOW_ID` and `N8N_WATCHDOG_SLACK_WORKFLOW_ID`.
 When an allowlist is not supplied, `N8N_WATCHDOG_MAX_WORKFLOW_LABELS` bounds the
 number of workflow label values retained; an allowlist is preferred for
 production.
@@ -31,9 +33,12 @@ Execution list responses are byte-capped and paginated to a configured time
 boundary (`N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS`). If the boundary cannot be
 proven within `N8N_WATCHDOG_MAX_PAGES`, collection is marked unhealthy instead
 of silently treating a fixed latest-N sample as complete. Listing calls request
-metadata only; full `includeData=true` payloads are fetched only for a
-candidate whose node boundary needs classification and for configured
-notification correlation.
+metadata only; full `includeData=true` payloads are fetched when inline error
+metadata cannot prove that an error row is not a zero-node queue failure and
+for configured notification correlation. On n8n 1.123.27, continuation uses
+the last execution ID (`lastId`) from the page boundary; the response's
+`nextCursor` is only a server-side indication that another `lastId` request is
+needed.
 
 Health URLs and Redis/PostgreSQL hosts are optional. An unset probe is exposed
 as `configured=0` and is excluded from the dependency alert rule. Configure
@@ -100,8 +105,9 @@ of this implementation.
   collector does not assume a worker HTTP server exists.
 - Redis key names are implementation details of Bull and are telemetry only;
   source execution records remain the authoritative failure signal.
-- A notification correlation read that fails or reaches its page cap is
-  explicitly unknown and emits a dependency metric; retained failures remain
-  unnotified until a successful receipt is observed.
+- A notification correlation read that fails, reaches its page cap, or lacks
+  either required workflow ID is explicitly unknown and emits a dependency
+  metric; retained failures remain unnotified until a successful receipt is
+  observed.
 - The exporter is intentionally not a broker reconciliation or trading
   decision component.
