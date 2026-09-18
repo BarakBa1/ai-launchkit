@@ -244,7 +244,7 @@ services:
   n8n-import:
     <<: *service-n8n
     container_name: n8n-import
-    profiles: ["n8n"]
+    profiles: ["n8n", "n8n-mcp"]
     environment:
       <<: *service-n8n-env
       RUN_N8N_IMPORT: ${RUN_N8N_IMPORT:-false}
@@ -260,7 +260,7 @@ services:
   n8n:
     <<: *service-n8n
     container_name: n8n
-    profiles: ["n8n"]
+    profiles: ["n8n", "n8n-mcp"]
     restart: unless-stopped
     environment:
       <<: *service-n8n-env
@@ -275,6 +275,12 @@ services:
     depends_on:
       n8n-import:
         condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:5678/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
 
   n8n-worker:
     <<: *service-n8n
@@ -328,6 +334,49 @@ services:
       start_period: 10s
     extra_hosts:
       - host.docker.internal:host-gateway
+
+  n8n-queue-watchdog:
+    image: python:3.12-alpine
+    container_name: n8n-queue-watchdog
+    profiles: ["monitoring"]
+    restart: unless-stopped
+    command: ["python", "/app/monitoring/n8n_queue_watchdog.py", "--host", "0.0.0.0", "--port", "9105"]
+    environment:
+      PYTHONDONTWRITEBYTECODE: "1"
+      N8N_WATCHDOG_API_URL: ${N8N_WATCHDOG_API_URL:-}
+      N8N_API_KEY: ${N8N_API_KEY:-}
+      N8N_WATCHDOG_WORKFLOW_IDS: ${N8N_WATCHDOG_WORKFLOW_IDS:-}
+      N8N_WATCHDOG_MAX_WORKFLOW_LABELS: ${N8N_WATCHDOG_MAX_WORKFLOW_LABELS:-50}
+      N8N_WATCHDOG_MAX_RESPONSE_BYTES: ${N8N_WATCHDOG_MAX_RESPONSE_BYTES:-5000000}
+      N8N_WATCHDOG_MAX_PAGES: ${N8N_WATCHDOG_MAX_PAGES:-10}
+      N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS: ${N8N_WATCHDOG_SOURCE_LOOKBACK_SECONDS:-3600}
+      N8N_WATCHDOG_ERROR_WORKFLOW_ID: ${N8N_WATCHDOG_ERROR_WORKFLOW_ID:-}
+      N8N_WATCHDOG_SLACK_WORKFLOW_ID: ${N8N_WATCHDOG_SLACK_WORKFLOW_ID:-}
+      N8N_WATCHDOG_NOTIFICATION_GRACE_SECONDS: ${N8N_WATCHDOG_NOTIFICATION_GRACE_SECONDS:-60}
+      N8N_WATCHDOG_FAILURE_RETENTION_SECONDS: ${N8N_WATCHDOG_FAILURE_RETENTION_SECONDS:-3600}
+      N8N_WATCHDOG_EXECUTION_LIMIT: ${N8N_WATCHDOG_EXECUTION_LIMIT:-100}
+      N8N_WATCHDOG_N8N_HEALTH_URL: ${N8N_WATCHDOG_N8N_HEALTH_URL:-http://n8n:5678/healthz}
+      N8N_WATCHDOG_WORKER_HEALTH_URL: ${N8N_WATCHDOG_WORKER_HEALTH_URL:-}
+      N8N_WATCHDOG_REDIS_HOST: ${N8N_WATCHDOG_REDIS_HOST:-redis}
+      N8N_WATCHDOG_REDIS_PORT: ${N8N_WATCHDOG_REDIS_PORT:-6379}
+      N8N_WATCHDOG_REDIS_USERNAME: ${N8N_WATCHDOG_REDIS_USERNAME:-}
+      N8N_WATCHDOG_REDIS_PASSWORD: ${N8N_WATCHDOG_REDIS_PASSWORD:-}
+      N8N_WATCHDOG_REDIS_SCAN_COUNT: ${N8N_WATCHDOG_REDIS_SCAN_COUNT:-100}
+      N8N_WATCHDOG_REDIS_MAX_KEYS: ${N8N_WATCHDOG_REDIS_MAX_KEYS:-500}
+      N8N_WATCHDOG_POSTGRES_HOST: ${N8N_WATCHDOG_POSTGRES_HOST:-postgres}
+      N8N_WATCHDOG_POSTGRES_PORT: ${N8N_WATCHDOG_POSTGRES_PORT:-5432}
+      N8N_WATCHDOG_PROBE_TIMEOUT_SECONDS: ${N8N_WATCHDOG_PROBE_TIMEOUT_SECONDS:-2}
+      N8N_WATCHDOG_SCRAPE_CACHE_SECONDS: ${N8N_WATCHDOG_SCRAPE_CACHE_SECONDS:-10}
+    volumes:
+      - ./monitoring:/app/monitoring:ro
+    expose:
+      - "9105"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:9105/healthz', timeout=2)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
   qdrant:
     image: qdrant/qdrant
@@ -921,9 +970,13 @@ services:
     restart: unless-stopped
     volumes:
       - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/rules:/etc/prometheus/rules:ro
       - prometheus_data:/prometheus
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    depends_on:
+      n8n-queue-watchdog:
+        condition: service_started
 
   node-exporter:
     image: prom/node-exporter:latest
@@ -2788,7 +2841,10 @@ services:
     container_name: n8n-mcp
     profiles: ["n8n-mcp"]
     restart: unless-stopped
+    entrypoint: ["node", "/usr/local/bin/n8n_mcp_entrypoint.js"]
     environment:
+      # N8N_MCP_TOKEN authenticates inbound MCP clients; N8N_API_KEY below is
+      # a separate n8n-issued public API JWT supplied by the operator.
       - AUTH_TOKEN=${N8N_MCP_TOKEN}
       - USE_FIXED_HTTP=true
       - N8N_HOST=n8n
@@ -2799,8 +2855,12 @@ services:
       - PORT=3000
     volumes:
       - n8n-mcp-data:/app/data
+      - ./scripts/n8n_mcp_entrypoint.js:/usr/local/bin/n8n_mcp_entrypoint.js:ro
+    depends_on:
+      n8n:
+        condition: service_healthy
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:3000/health"]
+      test: ["CMD-SHELL", "curl --silent --fail --output /dev/null http://localhost:3000/health"]
       interval: 30s
       timeout: 10s
       retries: 3

@@ -1,0 +1,21 @@
+[Unit]
+Description=AI LaunchKit n8n queue watchdog
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ai-launchkit-watchdog
+Group=ai-launchkit-watchdog
+EnvironmentFile=/etc/ai-launchkit/n8n-queue-watchdog.env
+ExecStart=/usr/bin/python3 /opt/ai-launchkit/monitoring/n8n_queue_watchdog.py --host 0.0.0.0 --port 9105
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=strict
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+
+[Install]
+WantedBy=multi-user.target

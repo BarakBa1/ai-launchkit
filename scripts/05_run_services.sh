@@ -17,6 +17,17 @@ if [ ! -f "docker-compose.yml" ]; then
   exit 1
 fi
 
+# Validate only the cheap optional n8n-mcp credential shape before any service
+# launch. The authoritative API check belongs inside the n8n-mcp container,
+# after Compose has started n8n and observed its healthy state; probing here
+# would deadlock clean installs whose n8n API is not up yet.
+# N8N_MCP_TOKEN remains the inbound MCP token; N8N_API_KEY must be an
+# externally issued n8n public API JWT when n8n-mcp is selected.
+source .env
+if ! require_n8n_mcp_api_key "${COMPOSE_PROFILES:-}" "${N8N_API_KEY:-}"; then
+  exit 1
+fi
+
 # 3. Check for Caddyfile (optional but recommended for reverse proxy)
 if [ ! -f "Caddyfile" ]; then
   log_warning "Caddyfile not found in project root. Reverse proxy might not work as expected." >&2
@@ -59,7 +70,6 @@ if [ -f "./scripts/setup_postal.sh" ]; then
 fi
 
 # Build services that need local compilation
-source .env
 if [[ "$COMPOSE_PROFILES" == *"tts-chatterbox"* ]]; then
     log_info "Checking Chatterbox Frontend..."
     # Clone the repository if not exists

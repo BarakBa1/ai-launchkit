@@ -63,7 +63,7 @@ base_services_data=(
     "searxng" "SearXNG (Private Metasearch Engine)"
     "miniflux" "Miniflux (Minimalist and opinionated feed reader)"
     "langfuse" "Langfuse Suite (AI Observability - includes Clickhouse, Minio)"
-    "monitoring" "Monitoring Suite (Prometheus, Grafana, cAdvisor, Node-Exporter)"
+    "monitoring" "Monitoring Suite (Prometheus, Grafana, Queue Watchdog, cAdvisor, Node-Exporter)"
     "cloudflare-tunnel" "Cloudflare Tunnel (Zero-Trust Secure Access)"
     "flowise" "Flowise (AI Agent Builder)"
     "n8n-mcp" "n8n-MCP (AI workflow generation for Claude/Cursor)"
@@ -280,6 +280,19 @@ else
         fi
     done
 fi
+
+# n8n-mcp uses two deliberately separate credentials: N8N_MCP_TOKEN is its
+# inbound server token, while N8N_API_KEY must be an n8n-issued public API JWT.
+# Validate before changing COMPOSE_PROFILES so a failed selection is atomic.
+n8n_api_key_value=""
+if [ -f "$ENV_FILE" ] && grep -q "^N8N_API_KEY=" "$ENV_FILE"; then
+    n8n_api_key_value=$(grep "^N8N_API_KEY=" "$ENV_FILE" | head -n 1 | cut -d'=' -f2- | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+fi
+if ! require_n8n_mcp_api_key "$COMPOSE_PROFILES_VALUE" "$n8n_api_key_value"; then
+    unset n8n_api_key_value
+    exit 1
+fi
+unset n8n_api_key_value
 
 # Update or add COMPOSE_PROFILES in .env file
 # Ensure .env file exists (it should have been created by 03_generate_secrets.sh or exist from previous run)

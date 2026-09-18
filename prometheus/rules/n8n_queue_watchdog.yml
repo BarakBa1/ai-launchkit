@@ -1,0 +1,72 @@
+groups:
+  - name: n8n-queue-watchdog
+    rules:
+      - alert: N8nQueueWatchdogTargetDown
+        expr: up{job="n8n-queue-watchdog"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog scrape target is down
+          description: Prometheus cannot scrape the independent n8n queue watchdog.
+
+      - alert: N8nQueueWatchdogDown
+        expr: time() - n8n_watchdog_last_collection_timestamp_seconds > 120
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog is stale
+          description: The independent n8n queue watchdog has not completed a collection cycle for more than two minutes.
+
+      - alert: N8nQueueWatchdogCollectionUnhealthy
+        expr: n8n_watchdog_collection_success == 0
+        for: 2m
+        labels:
+          severity: critical
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog cannot establish complete execution coverage
+          description: The watchdog API is missing, unreachable, insecurely configured, or returned incomplete execution coverage.
+
+      - alert: N8nQueueWatchdogExecutionDetailFailure
+        expr: increase(n8n_watchdog_execution_detail_failures_total[5m]) > 0
+        for: 1m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog could not classify execution details
+          description: One or more candidate executions could not be read with the bounded detail request.
+
+      - alert: N8nQueueWatchdogNotificationCorrelationDown
+        expr: n8n_watchdog_notification_correlation_attempted == 1 and n8n_watchdog_notification_correlation_up == 0
+        for: 1m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue notification correlation is incomplete
+          description: Notification correlation failed, reached its time boundary, or lacks either required workflow ID; unnotified failures remain alertable.
+
+      - alert: N8nQueueFailureUnnotified
+        expr: n8n_queue_failure_unnotified > 0
+        for: 1m
+        labels:
+          severity: critical
+          component: n8n-queue
+        annotations:
+          summary: n8n queue failure has no notification receipt
+          description: A zero-node Bull queue failure has no successful configured error and Slack notification path.
+
+      - alert: N8nQueueWatchdogComponentDown
+        expr: n8n_watchdog_component_configured == 1 and on (component) n8n_watchdog_component_up == 0
+        for: 2m
+        labels:
+          severity: warning
+          component: n8n-queue-watchdog
+        annotations:
+          summary: n8n queue watchdog dependency probe failed
+          description: A configured n8n, worker, Redis, PostgreSQL, or API probe is unavailable.
