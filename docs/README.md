@@ -23,6 +23,15 @@ procedures.
 - `../.env.example` — configuration names only; never inspect real `.env`.
 - Caddy configuration under the repository's Caddy paths — public routing.
 
+## Repository-local state
+
+- `../temp/` is the ignored repository-owned root for transient and quarantine
+  material; quarantine manifests include restore metadata.
+- `../worktrees/` is the ignored repository-owned root for auxiliary Git
+  worktrees.
+- Do not create either directory under `../.kilo/`; shared Kilo guidance lives
+  at [`../../.kilo/`](../../.kilo/).
+
 ## Historical context
 
 [`../memory-bank/README.md`](../memory-bank/README.md) indexes durable design

@@ -1,124 +1,77 @@
-.DS_Store
+# Environment and secret material
 .env
 .env.bak
 .env.test
+.env.local
+ai-launchkit-credentials.json
+VAULTWARDEN_IMPORT.txt
+
+# Runtime state and generated service data
 neo4j/
-searxng/settings.yml
-searxng/uwsgi*
 shared-backup/
 shared/
 supabase/
 dify/
-volumes/bolt-data/
+volumes/
 openedai-config/
 openedai-voices/
 perplexica/
-# Mail Services
+docker-data/
+calcom-docker/
+website/
+vexa/
+chatterbox-frontend/
 postal/config/
 mailpit_data/
 postal_mariadb/
 postal_rabbitmq/
 postal_assets/
 postal_uploads/
-calcom-docker/
-*.backup-postal
-docker-data/
-dkim_generation.log
-dkim_record.txt
-
-# Jitsi configuration directories
+searxng/settings.yml
+searxng/uwsgi*
+volumes/bolt-data/
 jitsi-jicofo/
 jitsi-jvb/
 jitsi-prosody-config/
 jitsi-prosody-plugins/
 jitsi-web/
 jitsi-transcripts/
-VAULTWARDEN_IMPORT.txt
-ai-launchkit-credentials.json
-chatterbox-frontend/
-chatterbox-frontend/
-chatterbox-frontend/
-website/
-vexa/
-volumes/
+*.backup-postal
+dkim_generation.log
+dkim_record.txt
 
-# Environment secrets
-.env
+# Repository-local transient state; never place these under .kilo/
+/temp/
+/worktrees/
 
-# Python cache
+# Python
 __pycache__/
 *.pyc
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
 
-# macOS
-.DS_Store
-
-# Node.js
+# Node.js and build output
 node_modules/
+dist/
+build/
+coverage/
+.nyc_output/
 
 # n8n
 .n8n/
 
-# Logs
+# Logs and generated files
 *.log
-
-# IDE
-.idea/
-.vscode/
-
 .png
 
-node_modules/
-
-dist/
-
-build/
-
-.env
-
-.env.local
-
-*.log
-
+# Operating-system and editor files
 .DS_Store
-
-coverage/
-
-.nyc_output/
-
-__pycache__/
-
-*.pyc
-
-.venv/
-
-venv/
-
-.env
-
-.pytest_cache/
-
-.mypy_cache/
-
-.ruff_cache/
-
-*.egg-info/
-
-dist/
-
-build/
-
-.DS_Store
-
 Thumbs.db
-
+.idea/
+.vscode/
 *.swp
-
 *.swo
-
-.idea/        # JetBrains
-
-.vscode/      # optional — many teams commit this
-
-*.log
-
-# ============================================================

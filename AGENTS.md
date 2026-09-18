@@ -29,6 +29,23 @@ The `n8n` profile this fork provisions must run **n8n 1.*** with Pyodide-based P
 Do not infer current behavior from the removed generated service encyclopedia
 or completed memory-bank task journals; use code and current runbooks.
 
+## Repository-local layout
+
+- `temp/` is the ignored repository-owned root for transient files and
+  quarantine material. For ambiguous or stale artifacts, create
+  `temp/quarantine/YYYY-MM-DD/` first, record a manifest and restore metadata,
+  then move the exact resolved paths without permanent deletion.
+- `worktrees/` is the ignored repository-owned root for intentionally created
+  auxiliary Git worktrees. Git-linked worktrees managed outside this checkout
+  remain under their existing owner and must not be moved during repository
+  housekeeping.
+- Keep repository-owned folder names lowercase kebab-case. Preserve
+  service-specific paths and tracked external-project entries unless their
+  removal is explicitly scoped.
+- The shared current Kilo runtime is at [`../.kilo/`](../.kilo/). This
+  repository must not create `temp/` or `worktrees/` under `.kilo/`; use the
+  repository roots above.
+
 ## Safety
 
 - Never read or display `.env` values. Use `.env.example` for variable names.
