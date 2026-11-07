@@ -36,9 +36,8 @@ procedures.
 
 ## Historical context
 
-[`../memory-bank/README.md`](../memory-bank/README.md) indexes durable design
-context, archived features, and retrospectives. Historical files are evidence,
-not current operational instructions.
+[`../memory-bank/README.md`](../memory-bank/README.md) indexes the original
+project brief and design context. It is history, not current instructions.
 
 The previous `README_Services.md` and `n8n-installer-developer-guide.md` were
 removed because they duplicated Compose/scripts, exceeded practical review
