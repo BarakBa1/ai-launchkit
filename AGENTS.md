@@ -31,20 +31,7 @@ or completed memory-bank task journals; use code and current runbooks.
 
 ## Repository-local layout
 
-- `temp/` is the ignored repository-owned root for transient files and
-  quarantine material. For ambiguous or stale artifacts, create
-  `temp/quarantine/YYYY-MM-DD/` first, record a manifest and restore metadata,
-  then move the exact resolved paths without permanent deletion.
-- `worktrees/` is the ignored repository-owned root for intentionally created
-  auxiliary Git worktrees. Git-linked worktrees managed outside this checkout
-  remain under their existing owner and must not be moved during repository
-  housekeeping.
-- Keep repository-owned folder names lowercase kebab-case. Preserve
-  service-specific paths and tracked external-project entries unless their
-  removal is explicitly scoped.
-- The shared current Kilo runtime is at [`../.kilo/`](../.kilo/). This
-  repository must not create `temp/` or `worktrees/` under `.kilo/`; use the
-  repository roots above.
+Scratch goes in `temp/` and auxiliary Git worktrees in `worktrees/` (workspace rule M10). Keep folder names lowercase kebab-case, and preserve service-specific paths.
 
 ## Safety
 
@@ -110,5 +97,4 @@ explicit scope/approval.
 
 ## Git
 
-Follow workspace Git safety. Never commit/push automatically, force-push a
-protected branch, or run `git reset --hard` without explicit confirmation.
+Follow workspace rule G1: ask before committing or pushing here unless the current request asks for it.
