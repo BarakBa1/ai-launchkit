@@ -101,6 +101,11 @@ x-n8n: &service-n8n
     EXECUTIONS_MODE: queue
     EXECUTIONS_TIMEOUT: 900
     EXECUTIONS_TIMEOUT_MAX: 7200
+    # Long Pyodide steps block the worker event loop; default 60 s locks lapse and Bull marks the job stalled
+    # ("crashed") and may retry it. Keep the lock for an hour and check for stalls every 5 min.
+    QUEUE_WORKER_LOCK_DURATION: 3600000
+    QUEUE_WORKER_LOCK_RENEW_TIME: 60000
+    QUEUE_WORKER_STALLED_INTERVAL: 300000
     EXECUTIONS_DATA_PRUNE: true
     EXECUTIONS_DATA_MAX_AGE: 168
     EXECUTIONS_DATA_PRUNE_MAX_COUNT: 10000
