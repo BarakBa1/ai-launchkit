@@ -264,6 +264,7 @@ services:
     restart: unless-stopped
     environment:
       <<: *service-n8n-env
+      EXECUTIONS_TIMEOUT_MAX: 28800
     volumes:
       - n8n_storage:/home/node/.n8n
       - ./n8n/backup:/backup
@@ -289,6 +290,7 @@ services:
     command: worker
     environment:
       <<: *service-n8n-env
+      EXECUTIONS_TIMEOUT_MAX: 28800
     volumes:
       - n8n_storage:/home/node/.n8n
       - ./shared:/data/shared
