@@ -1,0 +1,54 @@
+# ai4trade app, production (paper) stack: stage B1 (ai-n8n-trading docs/migration/plan.md section 7.2).
+#
+# Deployed to /root/ai4trade/compose.yml on the VPS, next to two env files (mode 600, never in git):
+#   operator.env  the operator's values (Alpaca paper keys, Slack, Miniflux, providers, DASHBOARD_USER,
+#                 DASHBOARD_PASSWORD_HASH, HEARTBEAT_PING_URL; names in docs/reference/environment-variables.md)
+#   db.env        POSTGRES_* for the ai4trade_app login (written on the VPS; the password is generated there)
+# Later files win: db.env over operator.env, then `environment:` below over both.
+#
+#   cd /root/ai4trade && AI4TRADE_TAG=<git-sha> docker compose up -d
+#
+# Joins the launchkit network (postgres, miniflux, searxng, crawl4ai, weaviate, caddy). Every schedule
+# starts disabled (ai4trade.schedules.enabled defaults to false); the kill switch row fails closed.
+
+name: ai4trade
+
+x-app: &app
+  image: ai4trade:${AI4TRADE_TAG:?set AI4TRADE_TAG to the image git sha}
+  restart: unless-stopped
+  env_file:
+    - path: operator.env
+      required: true
+    - path: db.env
+      required: true
+  environment: &env
+    AI4TRADE_ENV: prod
+    APCA_API_BASE_URL: https://paper-api.alpaca.markets
+    AI4TRADE_HTTP_HOST: 0.0.0.0
+    AI4TRADE_HTTP_PORT: "8080"
+  networks: [launchkit]
+  deploy:
+    resources:
+      limits:
+        memory: 1G
+  logging:
+    driver: json-file
+    options:
+      max-size: 10m
+      max-file: "3"
+
+services:
+  ai4trade-main:
+    <<: *app
+    container_name: ai4trade-main
+    command: ["serve", "--role", "main"]
+
+  ai4trade-guard:
+    <<: *app
+    container_name: ai4trade-guard
+    command: ["serve", "--role", "guard"]
+
+networks:
+  launchkit:
+    external: true
+    name: localai_default
