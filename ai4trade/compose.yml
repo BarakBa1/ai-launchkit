@@ -16,6 +16,9 @@ name: ai4trade
 x-app: &app
   image: ai4trade:${AI4TRADE_TAG:?set AI4TRADE_TAG to the image git sha}
   restart: unless-stopped
+  volumes:
+    # Vertex service-account key (host dir and file owned by uid 10001, read-only in the container).
+    - ./secrets:/run/secrets/ai4trade:ro
   env_file:
     - path: operator.env
       required: true
@@ -26,6 +29,7 @@ x-app: &app
     APCA_API_BASE_URL: https://paper-api.alpaca.markets
     AI4TRADE_HTTP_HOST: 0.0.0.0
     AI4TRADE_HTTP_PORT: "8080"
+    GOOGLE_APPLICATION_CREDENTIALS: /run/secrets/ai4trade/google_sa.json
   networks: [launchkit]
   deploy:
     resources:

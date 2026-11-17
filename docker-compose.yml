@@ -2225,7 +2225,8 @@ services:
       --disable-csrf-token-checks
       --insecure
     healthcheck:
-      test: ["CMD", "curl", "-fsS", "http://localhost:51515"]
+      # the server answers 401 without credentials; 200 or 401 means it is up
+      test: ["CMD-SHELL", "c=$$(curl -s -o /dev/null -w '%{http_code}' http://localhost:51515); [ \"$$c\" = 200 ] || [ \"$$c\" = 401 ]"]
       interval: 30s
       timeout: 10s
       retries: 3
