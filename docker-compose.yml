@@ -467,6 +467,8 @@ services:
       - caddy-config:/config:rw
       - caddy_logs:/var/log/caddy:rw
     environment:
+      - AI4TRADE_BASIC_AUTH_USER=${AI4TRADE_BASIC_AUTH_USER}
+      - AI4TRADE_BASIC_AUTH_HASH=${AI4TRADE_BASIC_AUTH_HASH}
       - BASE_DOMAIN=${BASE_DOMAIN}
       - COMFYUI_HOSTNAME=${COMFYUI_HOSTNAME}
       - COMFYUI_PASSWORD_HASH=${COMFYUI_PASSWORD_HASH}
