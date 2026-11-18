@@ -30,8 +30,12 @@ FREE_FACTOR=${RESTORE_FREE_FACTOR:-3}   # free space needed on each of the two f
 FREE_EXTRA_GB=${RESTORE_FREE_EXTRA_GB:-5} #   FREE_FACTOR x dump size + FREE_EXTRA_GB (GiB)
 
 # schema.table and the timestamp column used for the as-of-dump comparison (same predicate on both sides).
+# ai4trade.runs uses started_at: it is NOT NULL and defaults to clock_timestamp() at insert, so every row has it
+# and a row inserted after the dump started cannot fall below the cut-off. scheduled_for is not used: it is NULL
+# for manual runs (the < cut-off predicate drops them on both sides) and can be a past time for a run inserted
+# after the dump started, which the live side would count and the dump would not.
 TABLES=(
-  "ai4trade.runs scheduled_for"
+  "ai4trade.runs started_at"
   "ai4trade.run_steps started_at"
   "barak.decisions created_at"
   "barak.opportunities created_at"
@@ -87,6 +91,9 @@ read -r SNAP_ID SNAP_WHEN < <(printf '%s\n' "$SNAP_LIST" | awk '
   inh && $4 ~ /^k[0-9a-f]+$/ { id = $4; when = $1 " " $2 }
   END { print id, when }')
 [[ "$SNAP_ID" =~ ^k[0-9a-f]{16,}$ ]] || die "no kopia snapshot found for $SNAP_SOURCE"
+# SNAP_WHEN goes into the backup.last_ok JSON literal, so accept only a plain "YYYY-MM-DD HH:MM:SS".
+[[ "$SNAP_WHEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
+  || die "unexpected snapshot time format in the kopia output"
 SNAP_EPOCH=$(date -u -d "$SNAP_WHEN" +%s) || die "cannot parse snapshot time '$SNAP_WHEN'"
 if (( $(date -u +%s) - SNAP_EPOCH > MAX_SNAPSHOT_AGE_S )); then
   die "newest snapshot $SNAP_ID is older than 36 h ($SNAP_WHEN UTC)"
