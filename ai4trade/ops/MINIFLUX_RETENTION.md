@@ -53,3 +53,25 @@ cd /root/ai-launchkit && docker compose --profile miniflux up -d --no-deps minif
 ## Expected effect
 
 Read entries stay about 76 days longer before the cleanup archives them, so the `miniflux` database grows. Its size was 2166 MB at read time. The nightly cleanup runs on Miniflux's own schedule.
+
+## Disk budget
+
+The growth is not measured yet. These are the bounds and the way to measure them.
+
+- Current size: about 2.1 GB (2166 MB, `pg_database_size`, read-only, 2026-11-18). This is the baseline for the comparison below.
+- Planning figure (estimate, not measured): if the current 2.1 GB were almost all read entries at a flat daily volume, 90 days of read retention would reach about 2.1 x 90 / 14, roughly 13.5 GB, so about 11 GB more. Unread entries stay as they are, and indexes grow with the rows, so the real figure can be above or below this. Plan with it until the measurement below replaces it.
+- Disk context (BACKUP.md G6): at read time `/` had 64 GB available, and the local nightly dumps alone reach about 58 GB at 14-day retention. The extra Miniflux growth comes out of the same headroom. Re-read `df -h /` before applying.
+- The `miniflux` database is in the file-level kopia snapshot, not in the logical dump (G4). Its growth also increases the snapshot and off-site storage.
+
+How to measure (read-only, on the VPS; the shared Postgres container is `postgres`):
+
+```bash
+docker exec postgres psql -U postgres -d miniflux -At -c "select pg_size_pretty(pg_database_size('miniflux'));"
+docker exec postgres psql -U postgres -d miniflux -At -c "select count(*), pg_size_pretty(sum(pg_column_size(e))) from entries e where status = 'read' and changed_at >= now() - interval '14 days';"
+```
+
+The second query gives the read rows and their stored size over the last 14 days, which is the current daily read volume times 14. Growth estimate at 90 days is that size divided by 14, times 76. Check the column names against the running Miniflux schema (`\d entries`) first. After apply, record `pg_database_size` once a day and compare with the 2166 MB baseline. Growth above the budget the operator sets is the trigger for the rollback below.
+
+Decision for the operator: the maximum size of the `miniflux` database and the minimum free space on `/` that the change may use. No number is set in this runbook. A starting proposal is a ceiling of 8 GB for the database, to be confirmed against the measured daily growth.
+
+Rollback note: restoring 14 days (Rollback section) stops further growth and the cleanup removes read entries older than 14 days on its next run. It does not give disk back to the OS. Postgres keeps the freed pages inside the database files until `VACUUM FULL` or a rebuild, which locks the table and is an availability decision of its own.
