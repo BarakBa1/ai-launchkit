@@ -16,6 +16,8 @@ Caddy substitutes `{$VAR}` when it loads the configuration. An unset or empty va
 
 Steps 2 to 4 change files only and do nothing until caddy is recreated. They can be done ahead of the approval window.
 
+Risk, accepted on purpose: the repo's `docker-compose.yml` references `${AI4TRADE_BASIC_AUTH_USER}` and `${AI4TRADE_BASIC_AUTH_HASH}` without `:?` guards. A guard would make every `docker compose` command on this host fail until step 2 is done. The cost is that a missing value is silent in compose (a warning, then an empty string) and reaches caddy only on recreate. The length checks in steps 4 and 6 are the only guard, so do not add `:?` guards without first checking every compose command on the VPS.
+
 ## Procedure
 
 Approval: step 6 interrupts every HTTP(S) route for a few seconds. Get explicit approval for steps 5 and 6 first.
@@ -75,24 +77,36 @@ cd /root/ai-launchkit && docker compose config --quiet && echo "compose_valid"
 docker compose config --format json | python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["caddy"]["environment"]; print({k: len(e.get(k) or "") for k in ("AI4TRADE_BASIC_AUTH_USER","AI4TRADE_BASIC_AUTH_HASH")})'
 ```
 
-Expected: both lengths greater than 0. The hash length is 60 (bcrypt). Stop if either is 0.
+Expected: both lengths greater than 0. The hash length is 60 (bcrypt). Stop if either is 0. This reads the environment caddy gets when it is recreated (the rendered compose config), and prints lengths only.
 
-### 5. Install the repo addon (after step 4 passes)
+### 5. Upload the repo addon under a temporary name (no effect yet)
 
 From the merged repo commit, on the workstation:
 
 ```bash
 scp ai4trade/caddy-ai4trade.conf root@$VPS_HOST:/root/ai-launchkit/caddy-addon/.ai4trade.conf.tmp
-ssh root@$VPS_HOST 'mv /root/ai-launchkit/caddy-addon/.ai4trade.conf.tmp /root/ai-launchkit/caddy-addon/ai4trade.conf'
 ```
 
-The temporary name does not end in `.conf`, so the `*.conf` import never sees it.
+The temporary name does not end in `.conf`, so the `*.conf` import never sees it. Nothing is loaded until step 6.
 
-### 6. Recreate the caddy service only (approval needed)
+### 6. Place the addon and recreate caddy in ONE ssh command (approval needed)
+
+Placing the addon and recreating caddy happen in one remote command, so no caddy restart can fall between them. A restart keeps the old process environment, which has no `AI4TRADE_BASIC_AUTH_*` values, so it would load the new addon with empty values and fail. The remote script repeats the length check of step 4 right before the `mv`, and stops before the `mv` if either value is empty. It prints lengths only, never values.
 
 ```bash
-cd /root/ai-launchkit && docker compose up -d --no-deps caddy
+ssh root@$VPS_HOST bash -s <<'REMOTE'
+set -eu
+cd /root/ai-launchkit
+n=$(docker compose config --format json | python3 -c 'import json,sys; e=json.load(sys.stdin)["services"]["caddy"]["environment"]; print(len(e.get("AI4TRADE_BASIC_AUTH_USER") or ""), len(e.get("AI4TRADE_BASIC_AUTH_HASH") or ""))')
+set -- $n
+if [ "${1:-0}" -eq 0 ] || [ "${2:-0}" -eq 0 ]; then echo "ABORT: empty value (lengths ${1:-?} ${2:-?}); addon not placed"; exit 1; fi
+echo "pre-check ok: user length $1, hash length $2"
+mv caddy-addon/.ai4trade.conf.tmp caddy-addon/ai4trade.conf
+docker compose up -d --no-deps caddy
+REMOTE
 ```
+
+If the script prints `ABORT`, it changed nothing: fix steps 2 and 3 and stop. If it prints `pre-check ok` and then fails, run step 8 at once.
 
 ### 7. Readback
 
