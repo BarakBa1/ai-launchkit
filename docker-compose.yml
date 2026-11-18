@@ -774,7 +774,8 @@ services:
       - SCHEDULER_ROUND_ROBIN_MAX_INTERVAL=120
       - SCHEDULER_ENTRY_FREQUENCY_MIN_INTERVAL=4
       - SCHEDULER_ENTRY_FREQUENCY_MAX_INTERVAL=120
-      - CLEANUP_ARCHIVE_READ_DAYS=14
+      # Read entries are kept 90 days (ruling E7). Unread retention is unchanged.
+      - CLEANUP_ARCHIVE_READ_DAYS=90
       - CLEANUP_ARCHIVE_UNREAD_DAYS=30
       - CLEANUP_BATCH_SIZE=10000
     depends_on:
