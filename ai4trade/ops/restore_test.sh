@@ -11,6 +11,7 @@
 # whether the run passes or fails.
 #
 # Exit status: 0 = restore verified and recorded; non-zero = the first failed check (message on stderr).
+# On a non-zero exit one line is posted to RESTORE_TEST_ALERT_URL when that variable is set (never printed).
 # This file holds no secret. The throwaway superuser password is generated per run, kept in a shell
 # variable and passed to docker by name, so it never appears in the command line.
 set -euo pipefail
@@ -43,8 +44,19 @@ SCRATCH=""   # temporary directory on the host
 NAME=""      # throwaway postgres container
 
 log() { printf '%s %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" "$*"; }
-die() { log "FAIL: $*" >&2; exit 1; }
+LAST_ERR=""  # the first failed check, used in the alert line
+die() { LAST_ERR="$*"; log "FAIL: $*" >&2; exit 1; }
 rand_hex() { od -An -N"$1" -tx1 /dev/urandom | tr -d ' \n'; }
+
+# Posts one line to RESTORE_TEST_ALERT_URL as form field "text". The URL is never printed or logged: curl's
+# output goes to /dev/null and only a generic line is logged. The receiving endpoint must accept a form field "text".
+alert_webhook() {
+  if curl --fail --silent --max-time 10 --data-urlencode "text=$1" "$RESTORE_TEST_ALERT_URL" >/dev/null 2>&1; then
+    log "alert posted"
+  else
+    log "warning: alert post failed"
+  fi
+}
 
 cleanup() {
   local rc=$?
@@ -53,6 +65,9 @@ cleanup() {
   if [ -n "$KTMP" ]; then docker exec "$KOPIA_CONTAINER" rm -rf -- "$KTMP" >/dev/null 2>&1; fi
   if [ -n "$SCRATCH" ]; then rm -rf -- "$SCRATCH"; fi
   if [ "$rc" -eq 0 ]; then log "restore test passed"; else log "restore test FAILED (exit $rc)"; fi
+  if [ "$rc" -ne 0 ] && [ -n "${RESTORE_TEST_ALERT_URL:-}" ]; then
+    alert_webhook "ai4trade restore test FAILED: ${LAST_ERR:-no FAIL line was logged} (exit $rc)"
+  fi
   exit "$rc"
 }
 trap cleanup EXIT

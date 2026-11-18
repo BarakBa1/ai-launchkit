@@ -75,7 +75,46 @@ Server time zone is Europe/Stockholm. Sunday 10:30 local is 09:30 UTC in winter.
 ssh root@$VPS_HOST 'crontab -l > /root/crontab.before-restore-test && (crontab -l; echo "30 10 * * 0 /usr/bin/flock -n /run/ai4trade-restore-test.lock /root/ops/restore_test.sh >> /var/log/ai4trade-restore-test.log 2>&1") | crontab - && crontab -l | tail -n 2'
 ```
 
-Expected: 4 lines in the crontab, the last one the new job.
+Expected: 4 lines in the crontab, the last one the new job (5 with the alert line below).
+
+### Failure alert (recommended)
+
+On a failed run the script posts one line to `RESTORE_TEST_ALERT_URL`, sent as the form field `text`. The receiving endpoint must accept that field. The URL is a secret: keep it out of chat, logs and this repo. Add it as the first line of root's crontab with `crontab -e` on the VPS (the crontab file is root-only), so no URL goes on a command line:
+
+```
+RESTORE_TEST_ALERT_URL=<webhook URL from the operator>
+30 10 * * 0 /usr/bin/flock -n /run/ai4trade-restore-test.lock /root/ops/restore_test.sh >> /var/log/ai4trade-restore-test.log 2>&1
+```
+
+A manual run posts an alert only if the variable is exported in that shell. Without the variable a failed run leaves only the log line, so the staleness check below is the backstop.
+
+### Log rotation
+
+The job appends to `/var/log/ai4trade-restore-test.log` and never rotates it. Install this as `/etc/logrotate.d/ai4trade-restore-test`:
+
+```
+/var/log/ai4trade-restore-test.log {
+    weekly
+    rotate 8
+    compress
+    delaycompress
+    missingok
+    notifempty
+    copytruncate
+}
+```
+
+`copytruncate` is needed because the job appends with `>>` and does not reopen the file. Check the snippet with `logrotate -d /etc/logrotate.d/ai4trade-restore-test` (dry run) before relying on it.
+
+### Staleness check (the backstop)
+
+`backup.last_ok` is written only by a passing run, and the test runs weekly. If its `updated_at` is more than 8 days old, the restore test is failing (8 days allows one missed Sunday). Readback:
+
+```bash
+ssh root@$VPS_HOST 'docker exec postgres psql -U postgres -d postgres -At -c "select updated_at < now() - interval '"'"'8 days'"'"' as stale, updated_at from ai4trade.state where key = '"'"'backup.last_ok'"'"';"'
+```
+
+`stale = t` means failing. No row at all means no run has ever passed.
 
 ### Rollback
 
