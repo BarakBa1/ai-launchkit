@@ -4,7 +4,8 @@
 # database, except for one upsert of ai4trade.state 'backup.last_ok' after every check has passed.
 #
 # Steps: take the newest kopia snapshot of the host root, take its newest nightly dump directory, check that
-# it is not marked FAILED, copy the dump out of the kopia container and verify SHA256SUMS, restore it into a
+# it is not marked FAILED, check free space on the Docker disk and the scratch directory (refuses a short
+# disk before anything is written), copy the dump out of the kopia container and verify SHA256SUMS, restore it into a
 # throwaway postgres:17 container (no network, no published ports, removed on exit), then compare row counts
 # for key tables with the live database as of the dump time. Every temporary object is removed on exit,
 # whether the run passes or fails.
@@ -22,6 +23,10 @@ SNAP_DUMP_DIR=root/backups/pg-nightly   # relative to the snapshot root
 MAX_SNAPSHOT_AGE_S=$((36 * 3600))       # refuse to test a snapshot older than 36 h
 TOL_ROWS=${RESTORE_TOL_ROWS:-5}         # allowed absolute difference per table, as of the dump time
 SCRATCH_PARENT=${RESTORE_SCRATCH_PARENT:-/var/tmp}   # host directory for the copied dump (removed on exit)
+LOCAL_DUMP_DIR=/root/backups/pg-nightly # host copy of the same directory (snapshot path root/backups/pg-nightly)
+DOCKER_ROOT=/var/lib/docker             # filesystem of the kopia temporary copy and of the throwaway database
+FREE_FACTOR=${RESTORE_FREE_FACTOR:-3}   # free space needed on each of the two filesystems:
+FREE_EXTRA_GB=${RESTORE_FREE_EXTRA_GB:-5} #   FREE_FACTOR x dump size + FREE_EXTRA_GB (GiB)
 
 # schema.table and the timestamp column used for the as-of-dump comparison (same predicate on both sides).
 TABLES=(
@@ -82,6 +87,25 @@ ENTRIES=$(docker exec "$KOPIA_CONTAINER" kopia ls "$SNAP_ID/$SNAP_DUMP_DIR/$STAM
 if grep -qx 'FAILED' <<<"$ENTRIES"; then die "dump $STAMP carries a FAILED marker"; fi
 log "testing dump $STAMP from snapshot $SNAP_ID"
 
+# 2b. Free-space check before anything is written. Peak use is the kopia temporary copy (inside the kopia
+#     container, on the Docker disk), the host copy in $SCRATCH_PARENT, and the throwaway database (Docker disk).
+#     The dump size is read from the host copy of the same dump directory (same file that kopia captured).
+#     Read-only up to this point; the script refuses to start the restore when either filesystem is short.
+DUMP_BYTES=$(stat -c %s "$LOCAL_DUMP_DIR/$STAMP/postgres.dump") \
+  || die "cannot read the size of $LOCAL_DUMP_DIR/$STAMP/postgres.dump (nothing written)"
+[[ "$DUMP_BYTES" =~ ^[0-9]+$ ]] || die "unexpected size for the local copy of dump $STAMP (nothing written)"
+GIB=$((1024 * 1024 * 1024))
+NEED_BYTES=$(( DUMP_BYTES * FREE_FACTOR + FREE_EXTRA_GB * GIB ))
+for p in "$DOCKER_ROOT" "$SCRATCH_PARENT"; do
+  avail_kb=$(df -Pk "$p" | awk 'NR == 2 { print $4 }') || avail_kb=""
+  [[ "$avail_kb" =~ ^[0-9]+$ ]] || die "cannot read the free space on $p (nothing written)"
+  avail=$(( avail_kb * 1024 ))
+  if (( avail < NEED_BYTES )); then
+    die "$p has $(( avail / GIB )) GiB free, needs $(( NEED_BYTES / GIB )) GiB = ${FREE_FACTOR} x dump of $(( DUMP_BYTES / GIB )) GiB + ${FREE_EXTRA_GB} GiB (nothing written)"
+  fi
+  log "free space on $p: $(( avail / GIB )) GiB (needs $(( NEED_BYTES / GIB )) GiB)"
+done
+
 # 3. Copy the dump out of the kopia container. kopia restores into a path inside that container (it cannot
 #    write to the host), then docker cp moves the three files to a private host directory.
 KTMP="/tmp/ai4trade-restore-$(rand_hex 6)"
@@ -92,6 +116,12 @@ chmod 700 "$SCRATCH"
 for f in postgres.dump toc.txt SHA256SUMS; do
   docker cp "$KOPIA_CONTAINER:$KTMP/$f" "$SCRATCH/$f" || die "copy of $f from the kopia container failed"
 done
+# The kopia temporary copy is not needed once the files are on the host. If removal fails, the exit trap retries.
+if docker exec "$KOPIA_CONTAINER" rm -rf -- "$KTMP"; then
+  KTMP=""
+else
+  log "warning: could not remove $KTMP in the kopia container; the exit trap retries"
+fi
 (cd "$SCRATCH" && sha256sum -c SHA256SUMS >/dev/null) || die "SHA256SUMS does not match the copied dump"
 TOC_LINES=$(wc -l < "$SCRATCH/toc.txt")
 (( TOC_LINES >= 100 )) || die "toc.txt has only $TOC_LINES lines"
