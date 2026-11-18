@@ -16,6 +16,19 @@ name: ai4trade
 x-app: &app
   image: ai4trade:${AI4TRADE_TAG:?set AI4TRADE_TAG to the image git sha}
   restart: unless-stopped
+  # Docker's default stop is 10 s; the app's shutdown budget is 20 s and a run can need more to settle
+  # its claim and close the run as PROCESS_SHUTDOWN (review-v0.1 01-orchestration B-1, 07-platform-ops B2).
+  stop_grace_period: 60s
+  # Overrides the image HEALTHCHECK (Dockerfile probes /health). Liveness only: /live answers 200 while the
+  # event loop runs. It is not /ready, so a closed start gate never restarts a container. Port 8080 must
+  # match AI4TRADE_HTTP_PORT in `environment` below. Compose marks the container unhealthy; it does not
+  # restart it (no autoheal sidecar).
+  healthcheck:
+    test: ["CMD", "python", "-c", "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8080/live', timeout=5).status == 200 else 1)"]
+    interval: 30s
+    timeout: 10s
+    retries: 3
+    start_period: 60s
   volumes:
     # Vertex service-account key (host dir and file owned by uid 10001, read-only in the container).
     - ./secrets:/run/secrets/ai4trade:ro
