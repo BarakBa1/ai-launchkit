@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Weekly restore test for the launchkit Postgres nightly dump (ai4trade v0.2 WP4; review-v0.1 07 B5, WP4).
 # Runs ON THE VPS as root from cron (install and schedule: ai4trade/ops/BACKUP.md). It only reads the live
-# database, except for one upsert of ai4trade.state 'backup.last_ok' after every check has passed.
+# database, except for one upsert of ai4trade.state 'backup.restore_ok' after every check has passed.
 #
 # Steps: take the newest kopia snapshot of the host root, take its newest nightly dump directory, check that
 # it is not marked FAILED, check free space on the Docker disk and the scratch directory (refuses a short
@@ -91,7 +91,7 @@ read -r SNAP_ID SNAP_WHEN < <(printf '%s\n' "$SNAP_LIST" | awk '
   inh && $4 ~ /^k[0-9a-f]+$/ { id = $4; when = $1 " " $2 }
   END { print id, when }')
 [[ "$SNAP_ID" =~ ^k[0-9a-f]{16,}$ ]] || die "no kopia snapshot found for $SNAP_SOURCE"
-# SNAP_WHEN goes into the backup.last_ok JSON literal, so accept only a plain "YYYY-MM-DD HH:MM:SS".
+# SNAP_WHEN goes into the backup.restore_ok JSON literal, so accept only a plain "YYYY-MM-DD HH:MM:SS".
 [[ "$SNAP_WHEN" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}[[:space:]][0-9]{2}:[0-9]{2}:[0-9]{2}$ ]] \
   || die "unexpected snapshot time format in the kopia output"
 SNAP_EPOCH=$(date -u -d "$SNAP_WHEN" +%s) || die "cannot parse snapshot time '$SNAP_WHEN'"
@@ -192,10 +192,10 @@ done
 
 # 7. Record the result. Only reached when every check above passed.
 RESTORED_AT=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-PAYLOAD="{\"dump\":\"$STAMP\",\"snapshot\":\"$SNAP_ID\",\"snapshot_at\":\"$SNAP_WHEN\",\"restored_at\":\"$RESTORED_AT\",\"tolerance_rows\":$TOL_ROWS,\"counts\":{$COUNTS_JSON}}"
+PAYLOAD="{\"at\":\"$RESTORED_AT\",\"dump\":\"$STAMP\",\"snapshot\":\"$SNAP_ID\",\"snapshot_at\":\"$SNAP_WHEN\",\"restored_at\":\"$RESTORED_AT\",\"tolerance_rows\":$TOL_ROWS,\"counts\":{$COUNTS_JSON}}"
 docker exec "$LIVE_CONTAINER" psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres -c \
   "insert into ai4trade.state (key, value, updated_at, updated_by)
-   values ('backup.last_ok', '$PAYLOAD'::jsonb, now(), 'restore_test.sh')
+   values ('backup.restore_ok', '$PAYLOAD'::jsonb, now(), 'restore_test.sh')
    on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at, updated_by = excluded.updated_by;" \
-  >/dev/null || die "could not record backup.last_ok"
-log "recorded backup.last_ok (dump $STAMP, snapshot $SNAP_ID)"
+  >/dev/null || die "could not record backup.restore_ok"
+log "recorded backup.restore_ok (dump $STAMP, snapshot $SNAP_ID)"

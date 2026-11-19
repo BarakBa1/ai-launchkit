@@ -10,6 +10,7 @@ ROOT=/root/backups/pg-nightly
 KEEP_DAYS=5
 KEEP_PREDEPLOY=2
 BACKUPS=/root/backups
+START=$(date +%s)
 TS=$(date -u +%Y%m%dT%H%M%SZ)
 D="$ROOT/$TS"
 
@@ -22,6 +23,16 @@ if [ "$(wc -l < "$D/toc.txt")" -lt 100 ]; then
   touch "$D/FAILED"; echo "dump TOC too short" >&2; exit 1
 fi
 ( cd "$D" && sha256sum postgres.dump toc.txt > SHA256SUMS )
+
+# 07-WP1: record the good dump for ops_watch (rule backup_age reads backup.dump_ok, limit 26 h). Written only after the
+# TOC check and the checksums; a failed write exits non-zero, so the cron mail and the missing row both show it.
+PAYLOAD="{\"at\":\"$(date -u +%Y-%m-%dT%H:%M:%SZ)\",\"bytes\":$(stat -c %s "$D/postgres.dump"),\"seconds\":$(( $(date +%s) - START ))}"
+docker exec postgres psql -X -q -v ON_ERROR_STOP=1 -U postgres -d postgres -c \
+  "insert into ai4trade.state (key, value, updated_at, updated_by)
+   values ('backup.dump_ok', '$PAYLOAD'::jsonb, now(), 'pg_dump_nightly.sh')
+   on conflict (key) do update set value = excluded.value, updated_at = excluded.updated_at,
+   updated_by = excluded.updated_by;" \
+  >/dev/null || { echo "could not record backup.dump_ok" >&2; exit 1; }
 echo "ok $D $(du -sh "$D" | cut -f1)"
 
 # retention: only dated directories directly under $ROOT, older than KEEP_DAYS
