@@ -3,9 +3,13 @@
 Repository-specific guidance for the operator-owned infrastructure fork. Read
 [`C:\GitHub\AGENTS.md`](../AGENTS.md) first.
 
+## What runs on this host
+
+AI4TRADE is the `ai4trade` Python app (Alpaca paper), defined by `ai4trade/compose.yml` here and deployed by `../ai-n8n-trading/scripts/deploy.sh`. It uses the launchkit PostgreSQL, Miniflux, SearXNG, Crawl4AI, Weaviate and Caddy. n8n is legacy: it only ingests news until the app repo's plan stage B2 retires it.
+
 ## n8n version requirement — n8n 1.* only
 
-The `n8n` profile this fork provisions must run **n8n 1.*** with Pyodide-based Python Code nodes. AI4TRADE workflows that run on top of this fork are not compatible with n8n 2.* (which switches to the native task runner / `typeVersion: 3` Code node and drops Pyodide). Keep `docker-compose.yml` pinned to `n8nio/n8n:1` (not `:latest`, not `:2`); keep `N8N_NATIVE_PYTHON_RUNNER: false`. An n8n 1.* to 2.* upgrade is **not** planned — see [`../ai-n8n-trading/README.md`](../ai-n8n-trading/README.md).
+While n8n runs, the `n8n` profile must run **n8n 1.*** with Pyodide-based Python Code nodes. The news-ingest workflows are not compatible with n8n 2.* (which switches to the native task runner / `typeVersion: 3` Code node and drops Pyodide). Keep the n8n image pinned to `n8nio/n8n:1` (`n8n/Dockerfile`, built by the `n8n` service in `docker-compose.yml`; not `:latest`, not `:2`); keep `N8N_NATIVE_PYTHON_RUNNER: false`. An n8n 1.* to 2.* upgrade is **not** planned — see [`../ai-n8n-trading/docs/legacy-n8n.md`](../ai-n8n-trading/docs/legacy-n8n.md).
 
 ## Authority and state boundaries
 
@@ -15,7 +19,8 @@ The `n8n` profile this fork provisions must run **n8n 1.*** with Pyodide-based P
   currently runs on the VPS.
 - Production host reads/writes require exact user authorization. Any production
   n8n VPS modification also follows workspace rule V1.
-- AI4TRADE workflows and prompts belong to `../ai-n8n-trading/`, not this repo.
+- The AI4TRADE app (code, `config/`, prompts, database schema and migrations, the deploy script) belongs to `../ai-n8n-trading/`. This repo owns the host shape, including `ai4trade/compose.yml`, the Caddy addon and the backup scripts in `ai4trade/ops/`.
+- Production VPS changes also follow the current operating mode (workspace rule M23) and paper V1 for app deploys.
 
 ## Documentation map
 

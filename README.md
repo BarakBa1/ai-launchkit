@@ -1,6 +1,7 @@
 # AI LaunchKit — operator fork
 
-Docker Compose-based source for the VPS that hosts AI4TRADE infrastructure.
+Docker Compose-based source for the VPS that hosts AI4TRADE: the `ai4trade`
+app (Alpaca paper) and the services it uses.
 This checkout tracks the operator-owned
 [`BarakBa1/ai-launchkit`](https://github.com/BarakBa1/ai-launchkit) fork; upstream
 lineage is
@@ -20,7 +21,7 @@ claim.
 | Installation sequence | [scripts/install.sh](scripts/install.sh) and numbered scripts under `scripts/` |
 | Add a service | [ADDING_NEW_SERVICE.md](ADDING_NEW_SERVICE.md) |
 | Environment template | [.env.example](.env.example) — never open a real `.env` in agent work |
-| AI4TRADE relationship | [../ai-n8n-trading/docs/infrastructure/ai-launchkit.md](../ai-n8n-trading/docs/infrastructure/ai-launchkit.md) |
+| AI4TRADE app stack | [ai4trade/](#the-ai4trade-app-stack) here; the app itself is [../ai-n8n-trading/](../ai-n8n-trading/docs/infrastructure/README.md) |
 
 ## What this repository controls
 
@@ -30,8 +31,24 @@ claim.
 - Ubuntu installation, update, cleanup, and service-selection scripts.
 - Optional setup/init helpers for services that need extra lifecycle work.
 
-It does not contain AI4TRADE workflows, prompts, database application schema,
-or broker logic. Those live in `../ai-n8n-trading/`.
+It does not contain the AI4TRADE app code, its config and prompts, its
+database schema or broker logic. Those live in `../ai-n8n-trading/`.
+
+## The ai4trade app stack
+
+The app runs as its own Compose project, defined here and deployed by the app
+repo's `scripts/deploy.sh`:
+
+| File | On the VPS | What it is |
+| --- | --- | --- |
+| [ai4trade/compose.yml](ai4trade/compose.yml) | `/root/ai4trade/compose.yml` | `ai4trade-main` and `ai4trade-guard`, one image `ai4trade:<git sha>`, `stop_grace_period: 60s`, joined to the launchkit network |
+| [ai4trade/caddy-ai4trade.conf](ai4trade/caddy-ai4trade.conf) | `/root/ai-launchkit/caddy-addon/ai4trade.conf` | The dashboard route: Caddy basic auth, then the app's own sign-in; `/metrics` not public |
+| [ai4trade/ops/](ai4trade/ops/) | `/root/ops/` | Nightly `pg_dump`, the restore test, and runbooks: [backups](ai4trade/ops/BACKUP.md), [Caddy reconcile](ai4trade/ops/RECONCILE_CADDY.md), [Miniflux retention](ai4trade/ops/MINIFLUX_RETENTION.md) |
+
+The app uses these launchkit services: PostgreSQL (`ai4trade` and `barak`
+schemas), Miniflux, SearXNG, Crawl4AI, Weaviate and Caddy. n8n is legacy: it
+only ingests news until the app repo's plan stage B2 retires it.
+
 
 ## Install on a supported host
 

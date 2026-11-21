@@ -10,16 +10,22 @@ procedures.
 | [../README.md](../README.md) | Operator overview and source-of-truth boundaries |
 | [../AGENTS.md](../AGENTS.md) | Agent and change rules |
 | [../ADDING_NEW_SERVICE.md](../ADDING_NEW_SERVICE.md) | Add or integrate a service |
-| [../monitoring/README.md](../monitoring/README.md) | External n8n queue watchdog and alerting |
+| [../ai4trade/ops/BACKUP.md](../ai4trade/ops/BACKUP.md) | AI4TRADE backups: coverage, the restore test, VPS steps |
+| [../ai4trade/ops/RECONCILE_CADDY.md](../ai4trade/ops/RECONCILE_CADDY.md) | Reconcile the AI4TRADE dashboard Caddy addon with the repo |
+| [../ai4trade/ops/MINIFLUX_RETENTION.md](../ai4trade/ops/MINIFLUX_RETENTION.md) | Miniflux read-entry retention (90 days) |
+| [../monitoring/README.md](../monitoring/README.md) | External n8n queue watchdog (legacy n8n) |
 | [CALCOM_SETUP.md](CALCOM_SETUP.md) | Cal.com setup and calendar integration |
 | [../cloudflare-instructions.md](../cloudflare-instructions.md) | Cloudflare Tunnel design and safety |
 | [../vexa-troubleshooting-workarounds.md](../vexa-troubleshooting-workarounds.md) | Vexa lifecycle and troubleshooting |
-| [N8N-MCP authentication](n8n-mcp-auth.md) | Public API JWT and inbound MCP token contract |
+| [N8N-MCP authentication](n8n-mcp-auth.md) | Public API JWT and inbound MCP token contract (legacy n8n) |
 
 ## Authoritative implementation sources
 
 - `../docker-compose.yml` — services, profiles, dependencies, health checks,
   networks, volumes, and ports.
+- `../ai4trade/compose.yml` and `../ai4trade/caddy-ai4trade.conf` — the
+  AI4TRADE app stack and its dashboard route. The app's own docs are in
+  `../../ai-n8n-trading/docs/` (start at `README.md` there).
 - `../scripts/install.sh` plus numbered scripts — install lifecycle.
 - `../scripts/04_wizard.sh` — selectable profiles.
 - `../.env.example` — configuration names only; never inspect real `.env`.
@@ -31,8 +37,8 @@ procedures.
   material; quarantine manifests include restore metadata.
 - `../worktrees/` is the ignored repository-owned root for auxiliary Git
   worktrees.
-- Do not create either directory under `../.kilo/`; shared Kilo guidance lives
-  at [`../../.kilo/`](../../.kilo/).
+- Shared agent rules and skills live in the workspace repo at `../../.claude/`
+  (`rules/RULES.md`); do not put scratch there.
 
 ## Historical context
 
