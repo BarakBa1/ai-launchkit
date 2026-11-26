@@ -54,6 +54,12 @@ services:
     <<: *app
     container_name: ai4trade-main
     command: ["serve", "--role", "main"]
+    # Replaces the anchor's list (YAML merge does not join lists), so the secrets mount is repeated here.
+    volumes:
+      - ./secrets:/run/secrets/ai4trade:ro
+      # Host status for the System page (B-085): written each minute by the root cron
+      # (ai4trade/ops/host_status.py, see ai4trade/ops/HOST_STATUS.md); setting system.host_status_path.
+      - /var/lib/ai4trade/host-status:/run/host-status:ro
 
   ai4trade-guard:
     <<: *app

@@ -29,9 +29,30 @@ Other facts: `/root/ops/pg_dump_nightly.sh` on the VPS has the same sha256 prefi
 - G3. Off-site copy happens only at the 23:45 UTC snapshot, so the newest dump is local-only for up to about 24 hours.
 - G4. The logical dump covers only database `postgres`. The `miniflux` and `langfuse` databases are covered only by file-level snapshots.
 - G5. The kopia global policy runs a before-hook that pauses every container except kopia (`docker ps -a -q --filter "name!=kopia" | xargs -r docker pause`, 5 min timeout) and an after-hook that unpauses them. This includes `ai4trade-main` and `ai4trade-guard`. The snapshot duration and the behaviour if kopia fails mid-snapshot were not measured.
-- G6. Local dump retention is 14 days (`KEEP_DAYS=14`) at about 4.15 GB per dump, which is about 58 GB at steady state. At read time, `/` had 64 GB available (68% used). At the current dump size, 14 days of local dumps reach about 58 GB around 2026-12-01 (estimate). This is a disk-full risk, not a coverage gap. Lower `KEEP_DAYS` or move dumps off this disk before then.
+- G6. Local dump retention was 14 days (`KEEP_DAYS=14`) at about 4.15 GB per dump. Resolved: see Dump retention below (B-002, ruling W-08; B-203).
 - G7. Disaster recovery needs the kopia repository password and the Azure storage credential. Their storage outside the VPS was not verified (not read, per M6).
 - G8. Unpinned images: `kopia/kopia:latest` and `miniflux/miniflux:latest`. A restore may behave differently after an upstream change.
+
+## Dump retention (`pg_dump_nightly.sh`, B-002, ruling W-08)
+
+The nightly script prunes only after tonight's dump has passed its TOC check and recorded `backup.dump_ok`, so a failed night never deletes anything.
+
+| Dumps | Location | Kept |
+| --- | --- | --- |
+| Nightly | `/root/backups/pg-nightly/<UTC stamp>/` | The 7 newest good dumps (`KEEP_NIGHTLY`). A directory with a `FAILED` marker does not count toward the 7; it stays on disk for 7 days (`FAILED_DAYS`, by directory mtime) and is then deleted (operator ruling, B-203). |
+| Deploy | `/root/backups/predeploy-<sha>-<UTC>/` (written by `ai-n8n-trading/scripts/deploy.sh`) | The 3 newest by mtime (`KEEP_PREDEPLOY`). |
+| Housekeeping and timing | `/root/backups/housekeeping-*`, `/root/backups/timing-*` | Deleted when older than 7 days (`HOUSEKEEPING_DAYS`). |
+| Named | `/root/backups/KEEP` | Every dump named there (one path or directory name per line, `#` starts a comment) is never deleted, whatever its age or rank. |
+
+Other entries in `/root/backups` are never touched. Before a rollback depends on a dump, put its name in `KEEP`; take it out when the rollback window is over.
+
+Dry run, changes nothing (no dump, no deletion):
+
+```bash
+ssh root@$VPS_HOST '/root/ops/pg_dump_nightly.sh --list'
+```
+
+Each line is `would delete <path>` or `keep <path> (named in /root/backups/KEEP)`.
 
 ## Restore test: `ai4trade/ops/restore_test.sh`
 
@@ -132,6 +153,6 @@ ssh root@$VPS_HOST 'docker exec postgres psql -U postgres -d postgres -At -c "de
 
 - D1. The 23:45 UTC snapshot pauses the AI4TRADE containers (G5). Decide whether to keep it, measure its duration, and check the after-hook behaviour on failure.
 - D2. Confirm that the kopia repository password and the Azure storage credential are stored outside the VPS (G7).
-- D3. Decide the local dump retention (G6). Options: `KEEP_DAYS=3` to 7, or keep 14 days and add free-space alerting.
+- D3. Decided (ruling W-08, 2026-11-26): 7 good nightly dumps, the 3 newest deploy dumps, and a KEEP file. See Dump retention.
 - D4. Decide whether `miniflux` and `langfuse` need logical dumps as well (G4). Proposed addition to `pg_dump_nightly.sh`, same dated directory and TOC check: `docker exec postgres pg_dump -U postgres -d miniflux -Fc > "$D/miniflux.dump"`, and the same for `langfuse`. Not implemented here.
 - D5. Pin the kopia and Miniflux image tags (G8).
