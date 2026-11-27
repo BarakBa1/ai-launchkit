@@ -10,6 +10,8 @@ Status: prepared, NOT applied. Every step below changes the VPS (`root@$VPS_HOST
 - Repo: root `docker-compose.yml`, `caddy` service, already has `AI4TRADE_BASIC_AUTH_USER=${AI4TRADE_BASIC_AUTH_USER}` and `AI4TRADE_BASIC_AUTH_HASH=${AI4TRADE_BASIC_AUTH_HASH}` (after the `BASE_DOMAIN` line in the caddy block).
 - Public probe `https://ai4trade.8739.site/` without credentials: HTTP 401 at 08:09:07 UTC. A probe of the Caddy admin API returned no matches, so the running Caddy configuration was not verified.
 
+Update 2026-11-27 (B-134, ruling X-10): the `/healthz` rule (unauthenticated `handle /healthz`, everything else in `handle` behind `basic_auth`) was applied to the VPS addon with the literal sign-in line kept, then `caddy validate` and `caddy reload` (no recreate; the reconcile above is still not applied). Backup: `/root/backups/caddy-healthz-20261127T202844Z/ai4trade.conf`. Readback: `/healthz` 200 `ok`; `/`, `/ready`, `/health`, `/metrics`, `/healthz/x` 401. Rollback: copy the backup back, `docker exec caddy caddy validate --config /etc/caddy/Caddyfile`, `docker exec caddy caddy reload --config /etc/caddy/Caddyfile`.
+
 ## Why the order matters
 
 Caddy substitutes `{$VAR}` when it loads the configuration. An unset or empty value makes the `basic_auth` block invalid, and Caddy then fails to start. Caddy serves every route on this VPS, so a bad recreate takes all of them down. The variables must exist in the caddy container before the addon that references them is loaded. A reload keeps the old process environment, so the caddy container must be recreated, not reloaded.
