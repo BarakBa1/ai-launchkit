@@ -4,6 +4,11 @@ Status: `ai4trade/ops/restore_test.sh` is written and tested against a docker st
 
 Commands below use `$VPS_HOST`, the VPS address. Export it in your shell first; the address is kept out of the repo.
 
+## Changes 2026-11-27 (operator approval)
+
+- The kopia snapshot runs at **01:30 UTC** (global policy `Snapshot times`, was 23:45; plan 07-F20). 01:30 UTC is 20:30 New York in winter and 21:30 in summer, after the guard window, so the before-hook pause (G5) no longer falls inside it (D1). The off-site lag of a 05:15 UTC dump grows from about 18 to about 20 hours (G3). The observations below are from 2026-11-18 and still say 23:45.
+- Removed from the host: the Langfuse stack (web, worker, ClickHouse, MinIO) and its data volumes, valkey (`redis`), Neo4j, Portainer and the exited n8n, n8n-runner, n8n-import, miniflux-init and Ollama containers. The `langfuse` database on the Postgres server is still there (G4, D4). `scripts/weekly_cleanup.sh` no longer has the Langfuse, ClickHouse and MinIO steps.
+
 ## Observed coverage (read-only, 2026-11-18 08:09 to 08:13 UTC)
 
 | Item | Location on the VPS | Covered by | Notes |

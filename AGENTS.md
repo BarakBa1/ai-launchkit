@@ -5,11 +5,11 @@ Repository-specific guidance for the operator-owned infrastructure fork. Read
 
 ## What runs on this host
 
-AI4TRADE is the `ai4trade` Python app (Alpaca paper), defined by `ai4trade/compose.yml` here and deployed by `../ai-n8n-trading/scripts/deploy.sh`. It uses the launchkit PostgreSQL, Miniflux, SearXNG, Crawl4AI, Weaviate and Caddy. n8n is legacy: it only ingests news until the app repo's plan stage B2 retires it.
+AI4TRADE is the `ai4trade` Python app (Alpaca paper), defined by `ai4trade/compose.yml` here and deployed by `../ai-n8n-trading/scripts/deploy.sh`. It uses the launchkit PostgreSQL, Miniflux, SearXNG, Crawl4AI, Weaviate and Caddy, with kopia for backups. Since 2026-11-27 nothing else runs: n8n, Langfuse, valkey (`redis`), Neo4j, Portainer and Ollama were removed from the host. In `docker-compose.yml` their services carry the `retired` profile (never activate it), and `redis`, `neo4j`, `n8n` and `n8n-import` start only for the catalog profiles that depend on them.
 
 ## n8n version requirement — n8n 1.* only
 
-While n8n runs, the `n8n` profile must run **n8n 1.*** with Pyodide-based Python Code nodes. The news-ingest workflows are not compatible with n8n 2.* (which switches to the native task runner / `typeVersion: 3` Code node and drops Pyodide). Keep the n8n image pinned to `n8nio/n8n:1` (`n8n/Dockerfile`, built by the `n8n` service in `docker-compose.yml`; not `:latest`, not `:2`); keep `N8N_NATIVE_PYTHON_RUNNER: false`. An n8n 1.* to 2.* upgrade is **not** planned — see [`../ai-n8n-trading/docs/legacy-n8n.md`](../ai-n8n-trading/docs/legacy-n8n.md).
+n8n no longer runs on the host (2026-11-27). If it is ever brought back, it must run **n8n 1.*** with Pyodide-based Python Code nodes. The news-ingest workflows are not compatible with n8n 2.* (which switches to the native task runner / `typeVersion: 3` Code node and drops Pyodide). Keep the n8n image pinned to `n8nio/n8n:1` (`n8n/Dockerfile`, built by the `n8n` service in `docker-compose.yml`; not `:latest`, not `:2`); keep `N8N_NATIVE_PYTHON_RUNNER: false`. An n8n 1.* to 2.* upgrade is **not** planned — see [`../ai-n8n-trading/docs/legacy-n8n.md`](../ai-n8n-trading/docs/legacy-n8n.md).
 
 ## Authority and state boundaries
 

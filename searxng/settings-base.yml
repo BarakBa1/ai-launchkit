@@ -7,8 +7,9 @@ server:
   image_proxy: true
 ui:
   static_use_hash: true
-redis:
-  url: redis://redis:6379/0
+# redis (valkey) retired 2026-11-27; the limiter is off, so SearXNG needs no valkey
+valkey:
+  url: false
 search:
     formats:
         - html

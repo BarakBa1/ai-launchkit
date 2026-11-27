@@ -249,7 +249,7 @@ services:
   n8n-import:
     <<: *service-n8n
     container_name: n8n-import
-    profiles: ["n8n", "n8n-mcp"]
+    profiles: ["n8n-mcp"]  # 2026-11-27: was ["n8n", "n8n-mcp"]; n8n is retired on the AI4TRADE host
     environment:
       <<: *service-n8n-env
       RUN_N8N_IMPORT: ${RUN_N8N_IMPORT:-false}
@@ -265,7 +265,7 @@ services:
   n8n:
     <<: *service-n8n
     container_name: n8n
-    profiles: ["n8n", "n8n-mcp"]
+    profiles: ["n8n-mcp"]  # 2026-11-27: was ["n8n", "n8n-mcp"]; n8n is retired on the AI4TRADE host
     restart: unless-stopped
     environment:
       <<: *service-n8n-env
@@ -290,7 +290,7 @@ services:
 
   n8n-worker:
     <<: *service-n8n
-    profiles: ["n8n"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["n8n"]
     restart: unless-stopped
     command: worker
     environment:
@@ -317,7 +317,7 @@ services:
     image: n8nio/runners:1
     # image: n8nio/runners:${N8N_RUNNERS_VERSION}
     container_name: n8n-runner
-    profiles: ["n8n"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["n8n"]
     restart: unless-stopped
     environment:
       <<: *service-n8n-env
@@ -400,7 +400,7 @@ services:
   neo4j:
     image: neo4j:latest
     container_name: neo4j
-    profiles: ["neo4j"]
+    profiles: ["graphiti"]  # 2026-11-27: was ["neo4j"]; neo4j now starts only for graphiti (not used on the AI4TRADE host)
     restart: unless-stopped
     volumes:
       - ./neo4j/data:/data
@@ -584,7 +584,7 @@ services:
   langfuse-worker:
     image: langfuse/langfuse-worker:3
     restart: always
-    profiles: ["langfuse"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["langfuse"]
     depends_on: &langfuse-depends-on
       postgres:
         condition: service_healthy
@@ -644,7 +644,7 @@ services:
   langfuse-web:
     image: langfuse/langfuse:3
     restart: always
-    profiles: ["langfuse"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["langfuse"]
     depends_on: *langfuse-depends-on
     environment:
       <<: *langfuse-worker-env
@@ -664,7 +664,7 @@ services:
   clickhouse:
     image: clickhouse/clickhouse-server
     restart: always
-    profiles: ["langfuse"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["langfuse"]
     user: "101:101"
     environment:
       CLICKHOUSE_DB: default
@@ -683,7 +683,7 @@ services:
   minio:
     image: minio/minio
     restart: always
-    profiles: ["langfuse"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["langfuse"]
     entrypoint: sh
     # create the 'langfuse' bucket before starting the service
     command: -c 'mkdir -p /data/langfuse && minio server --address ":9000" --console-address ":9001" /data'
@@ -739,7 +739,7 @@ services:
   miniflux-init:
     image: postgres:${POSTGRES_VERSION:-17}
     container_name: miniflux-init
-    profiles: ["miniflux"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["miniflux"]
     depends_on:
       postgres:
         condition: service_healthy
@@ -779,14 +779,16 @@ services:
       - CLEANUP_ARCHIVE_UNREAD_DAYS=30
       - CLEANUP_BATCH_SIZE=10000
     depends_on:
-      miniflux-init:
-        condition: service_completed_successfully
+      # miniflux-init is retired: the miniflux database already exists on this host.
+      postgres:
+        condition: service_healthy
       # miniflux-db:
       #   condition: service_healthy
     healthcheck:
       test: ["CMD", "/usr/bin/miniflux", "-healthcheck", "auto"]
 
   redis:
+    profiles: ["baserow", "nocodb", "postiz", "vikunja", "calcom", "livekit", "invoiceninja", "formbricks", "n8n-mcp"]  # 2026-11-27: was none; valkey now starts only for a profile that needs it (none on the AI4TRADE host)
     container_name: redis
     image: docker.io/valkey/valkey:8-alpine
     command: valkey-server --save 30 1 --loglevel warning
@@ -936,11 +938,11 @@ services:
         max-file: "1"
 
   ollama-cpu:
-    profiles: ["cpu"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["cpu"]
     <<: *service-ollama
 
   ollama-gpu:
-    profiles: ["gpu-nvidia"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["gpu-nvidia"]
     <<: *service-ollama
     deploy:
       resources:
@@ -951,7 +953,7 @@ services:
               capabilities: [gpu]
 
   ollama-gpu-amd:
-    profiles: ["gpu-amd"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["gpu-amd"]
     <<: *service-ollama
     image: ollama/ollama:rocm
     devices:
@@ -959,19 +961,19 @@ services:
       - "/dev/dri"
 
   ollama-pull-llama-cpu:
-    profiles: ["cpu"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["cpu"]
     <<: *init-ollama
     depends_on:
       - ollama-cpu
 
   ollama-pull-llama-gpu:
-    profiles: ["gpu-nvidia"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["gpu-nvidia"]
     <<: *init-ollama
     depends_on:
       - ollama-gpu
 
   ollama-pull-llama-gpu-amd:
-    profiles: [gpu-amd]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was [gpu-amd]
     <<: *init-ollama
     image: ollama/ollama:rocm
     depends_on:
@@ -1120,7 +1122,7 @@ services:
   portainer:
     image: portainer/portainer-ce:latest
     container_name: portainer
-    profiles: ["portainer"]
+    profiles: ["retired"]  # retired 2026-11-27 (AI4TRADE host uses none of it), was ["portainer"]
     restart: unless-stopped
     volumes:
       - portainer_data:/data
@@ -2236,7 +2238,6 @@ services:
       start_period: 60s
     depends_on:
       - postgres
-      - redis
 
   # ============================================================================
   # KIMAI - Professional Time Tracking
